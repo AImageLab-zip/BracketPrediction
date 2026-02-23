@@ -50,7 +50,7 @@ model = dict(
         enable_flash=False,
         cls_mode=False,
     ),
-    criteria=[  
+    criteria=[
         dict(type="CrossEntropyLoss", loss_weight=1.0, ignore_index=ignore_index),
     ],
 )
@@ -58,29 +58,30 @@ model = dict(
 # -----------------------------
 # Optimizer & Scheduler  
 # -----------------------------
-epoch = 60
-eval_epoch = 60
+epoch = 80
+eval_epoch = 80
 clip_grad = 1.0
  
-optimizer = dict(type="AdamW", lr=0.0005, weight_decay=0.05)
+optimizer = dict(type='AdamW', lr=0.0005, weight_decay=0.05)
 scheduler = dict(
-    type="OneCycleLR",
-    max_lr=optimizer["lr"],
+    type='OneCycleLR',
+    max_lr=0.0005,
     pct_start=0.15,
-    anneal_strategy="cos",
+    anneal_strategy='cos',
     div_factor=10.0,
-    final_div_factor=100.0,
-)
+    final_div_factor=100.0)
 
-# -----------------------------  
+# ------------------------------  
 # Dataset settings  
 # -----------------------------    
-dataset_type = "IosDataset"
-data_root = "/work/grana_maxillo/IOS_v1"
+dataset_type = "IosDatasetTeeth3ds"
+#data_root = "/homes/mlugli/BracketPrediction/data/original_data"
+data_root = "/homes/mlugli/BracketPrediction/data/normalized_data"
 feat_keys = ["coord"]  
 grid_size = 0.01
-fold = "/work/grana_maxillo/Mlugli/IOS_v1_files/folds/fold_1.json"
- 
+#grid_size = 0.025
+fold = "/homes/mlugli/BracketPrediction/data/splits/Teeth3DS_train_val_test_split"
+
 data = dict(
     num_classes = num_classes,
     ignore_index = ignore_index,
@@ -89,19 +90,20 @@ data = dict(
         "31-11", "32-12", "33-13", "34-14", "35-15", "36-16", "37-17", "38-18"
     ],
     train=dict(  
-        type=dataset_type,    
+        type=dataset_type,
         split="train", 
         fold=fold, 
         data_root=data_root,
         ignore_index = ignore_index,
         transform=[
-            dict(type='NormalizeCoord'),
-            dict(type='RandomRotate', angle=[-0.5, 0.5], axis='z', p=0.5),  
-            dict(type='RandomRotate', angle=[-0.5, 0.5], axis='x', p=0.5),  
-            dict(type='RandomRotate', angle=[-0.5, 0.5], axis='y', p=0.5),  
-            dict(type='RandomScale', scale=[0.9, 1.1]),
-            dict(type='RandomShift', shift=((-0.1, 0.1), (-0.1, 0.1), (-0.1, 0.1))),
-            dict(type='ExtendedRandomFlip', p=0.5),
+            # must enable normalize_coord on original data
+            #dict(type='NormalizeCoord'),
+            dict(type='RandomRotate', angle=[-0.1, 0.1], axis='z', p=0.5),  
+            dict(type='RandomRotate', angle=[-0.1, 0.1], axis='x', p=0.5),  
+            dict(type='RandomRotate', angle=[-0.1, 0.1], axis='y', p=0.5),  
+            dict(type='RandomScale', scale=[0.8, 1.2]),
+            dict(type='RandomShift', shift=((-0.05, 0.05), (-0.05, 0.05), (-0.05, 0.05))),
+            #dict(type='ExtendedRandomFlip', p=0.5),
             dict(
                 type='GridSample',
                 grid_size=grid_size,
@@ -125,7 +127,7 @@ data = dict(
         ignore_index=ignore_index,
         transform=[
             dict(type="Copy", keys_dict={"segment": "origin_segment"}),
-            dict(type="NormalizeCoord"),
+            #dict(type="NormalizeCoord"),
             dict(
                 type="GridSample",
                 grid_size=grid_size,
@@ -151,7 +153,7 @@ data = dict(
         data_root=data_root,
         ignore_index = ignore_index,
         transform=[
-            dict(type="NormalizeCoord"),
+            #dict(type="NormalizeCoord"),
         ],
         test_mode=True,
         test_cfg=dict(

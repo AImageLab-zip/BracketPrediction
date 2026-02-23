@@ -211,7 +211,7 @@ class SemSegTester(TesterBase):
         comm.synchronize()
         record = {}
         # fragment inference
-        for idx, data_dict in enumerate(self.test_loader):
+        for idx, data_dict in enumerate(self.test_loader): # for each sample
             start = time.time()
             data_dict = data_dict[0]  # current assume batch size is 1
             fragment_list = data_dict.pop("fragment_list")
@@ -229,7 +229,7 @@ class SemSegTester(TesterBase):
                     segment = data_dict["origin_segment"]
             else:
                 pred = torch.zeros((segment.size, self.cfg.data.num_classes)).cuda()
-                for i in range(len(fragment_list)):
+                for i in range(len(fragment_list)): # for each fragment of that sample
                     fragment_batch_size = 1
                     s_i, e_i = i * fragment_batch_size, min(
                         (i + 1) * fragment_batch_size, len(fragment_list)
@@ -1373,8 +1373,12 @@ class BracketTester_v2(TesterBase):
         # Create results directory in model folder  
         save_path = os.path.join(self.cfg.save_path, "results")  
         os.makedirs(save_path, exist_ok=True)  
+
+        # Timer
+        batch_time = AverageMeter()
         
-        for idx, data_dict in enumerate(self.test_loader):  
+        for idx, data_dict in enumerate(self.test_loader):
+            start = time.time()
             data_dict = data_dict[0]  
             fragment_list = data_dict.pop("fragment_list")  
             data_name = data_dict.pop("name")  
@@ -1457,7 +1461,8 @@ class BracketTester_v2(TesterBase):
                 if "outer_error" in sample_result:
                     log_msg += f", Outer Error: {sample_result['outer_error']:.4f}"
                 self.logger.info(log_msg)
-        
+            batch_time.update(time.time() - start)
+
         # Save all predictions to single JSON file
         predictions_file = os.path.join(save_path, "results.json")  
         with open(predictions_file, "w") as f:  
@@ -1492,6 +1497,7 @@ class BracketTester_v2(TesterBase):
             self.logger.info(f"Mean Incisal Error: {summary_data['mean_incisal_error']:.4f}")  
         if outer_errors:
             self.logger.info(f"Mean Outer Error: {summary_data['mean_outer_error']:.4f}")  
+        self.logger.info(f"Avg time per batch: {batch_time.avg:.3f}")
         self.logger.info(f"Predictions saved to: {predictions_file}")
         self.logger.info("<<<<<<<<<<<<<<<<< End Inference <<<<<<<<<<<<<<<<<")
       
@@ -1520,7 +1526,7 @@ class HeatmapTester(TesterBase):
         # Dictionary to store results in the format: sample_name -> [coord_x, coord_y, coord_z]
         all_results = {}
         self.channels = ['bracket', 'incisal', 'outer'] 
-        for idx, data_dict in enumerate(self.test_loader):    
+        for idx, data_dict in enumerate(self.test_loader):
             start = time.time()    
             data_dict = data_dict[0]    
             fragment_list = data_dict.pop("fragment_list")    
@@ -1560,7 +1566,7 @@ class HeatmapTester(TesterBase):
                         bs = be    
                     
                 logger.info(    
-                    f"Test: {idx + 1}/{len(self.test_loader)}-{data_name}, "    
+                    f"Test: {idx + 1}/{len(self.test_loader)}-{data_name}, "
                     f"Batch: {i}/{len(fragment_list)}"    
                 )    
                 

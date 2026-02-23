@@ -137,9 +137,16 @@ data = dict(
                 dict(type="Collect", keys=("coord", "grid_coord", "index", "inverse"), feat_keys=feat_keys),
             ],
             aug_transform=[
-                [dict(type='RandomRotate', angle=[-0.1, 0.1], axis='z', p=0.5)],
-                [dict(type='RandomRotate', angle=[-0.1, 0.1], axis='x', p=0.5)],
-                [dict(type='RandomRotate', angle=[-0.1, 0.1], axis='y', p=0.5)],
+                # FAST CONFIGURATION
+                [dict(type='RandomRotate', angle=[-0.1, 0.1], axis='z', p=0.0)]
+                # MEDIUM CONFIGURATION
+                #[dict(type='RandomRotate', angle=[-0.1, 0.1], axis='z', p=0.5)],
+                #[dict(type='RandomRotate', angle=[-0.1, 0.1], axis='x', p=0.5)],
+                #[dict(type='RandomRotate', angle=[-0.1, 0.1], axis='y', p=0.5)], 
+                # SLOW CONFIGURATION
+                #[dict(type='RandomScale', scale=[0.9, 1.1])],
+                #[dict(type='RandomFlip', p=0.5)],
+                #[dict(type='RandomShift', shift=((-0.05, 0.05), (-0.05, 0.05), (-0.05, 0.05)))]
             ],
         ),
     ),

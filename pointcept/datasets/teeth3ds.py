@@ -17,15 +17,15 @@ from copy import deepcopy
 from pointcept.datasets.transform import TRANSFORMS
 
 @DATASETS.register_module()
-class IosDataset(DefaultDataset):
+class IosDatasetTeeth3ds(DefaultDataset):
     """
-    Dataset for predicting bracket_point from STL files.
+    Dataset for predicting bracket_point from OBJ files.
     """
  
     def __init__(
         self,
-        data_root,
-        fold=None,
+        data_root, # path to normalized_data folder containing lower/ and upper/ subfolders
+        fold=None, # path to directory containing split files (training_lower.txt, validation_lower.txt, etc.)
         split="train",
         debug=False,
         transform=None,
@@ -43,11 +43,10 @@ class IosDataset(DefaultDataset):
             test_mode=test_mode,
             test_cfg=test_cfg,
             loop=loop,
-            ignore_index = ignore_index,
+            ignore_index=ignore_index,
         )
         self.debug = debug
         self.load_segment = load_segment
-        self.fallbacks = 0 # counter for malformed stl files
         self.default_mapping = {
             48: 1, 47: 2, 46: 3,
             45: 4, 44: 5, 43: 6,
@@ -61,63 +60,72 @@ class IosDataset(DefaultDataset):
             self.aug_transform = [Compose(aug) for aug in test_cfg.aug_transform]
  
     def get_data_list(self):
-        """Load list of data samples from fold JSON files, with path mapping."""
-        # If fold is None and split is test, use all files in data_root
-        if self.fold is None and self.split == "test":
-            file_names = []
-            for root, dirs, files in os.walk(self.data_root):
-                for file in files:
-                    if file.endswith('.stl'):
-                        rel_path = os.path.relpath(os.path.join(root, file), self.data_root)
-                        file_names.append(rel_path)
-            print(f"Loaded {len(file_names)} samples from all files in {self.data_root}, split {self.split}")
-            return file_names
+        """Load list of data samples from fold text files."""
+        if self.fold is None:
+            raise ValueError("fold parameter must be provided (path to directory with split files)")
         
-        if not os.path.exists(self.fold):
-            raise FileNotFoundError(
-                f"Split file not found: {self.fold}\n"
-                f"Please run the split generation script first to create split_{self.fold}.json"
-            )
-        with open(self.fold, 'r') as f:
-            split_data = json.load(f)
+        fold_dir = Path(self.fold)
+        if not fold_dir.exists():
+            raise FileNotFoundError(f"Fold directory not found: {self.fold}")
         
-        split_mapping = {
-            'train': 'train',
-            'val': 'validation',
-            'test': 'test'
+        # Map split to file names
+        split_file_mapping = {
+            'train': ['training_lower.txt', 'training_upper.txt'],
+            'val': ['validation_lower.txt', 'validation_upper.txt'],
+            'test': ['testing_lower.txt', 'testing_upper.txt']
         }
-        split_key = split_mapping.get(self.split)
-        if split_key not in split_data:
-            raise ValueError(f"Invalid split: {self.split}. Must be one of {list(split_mapping.keys())}")
-
-        # Get file paths from the split and apply path mapping
-        file_paths = split_data[split_key]['files']
-        file_names = []
-        for file_path in file_paths:
-            if file_path.endswith('.stl'):                
-                # Check if the STL file exists in data_root
-                full_stl_path = os.path.join(self.data_root, file_path)
-                if not os.path.exists(full_stl_path):
-                    continue
-                file_names.append(file_path)
-
-        print(f"Loaded {len(file_names)} samples from fold {self.fold}, split {self.split}")
-        print(f"  Patients: {len(split_data[split_key]['patient_ids'])}")
         
-        return file_names
-    
-    def _load_stl(self, stl_path):
+        if self.split not in split_file_mapping:
+            raise ValueError(f"Invalid split: {self.split}. Must be one of {list(split_file_mapping.keys())}")
+        
+        split_files = split_file_mapping[self.split]
+        
+        # Load filenames from split files
+        file_list = []
+        for split_file in split_files:
+            split_file_path = fold_dir / split_file
+            if not split_file_path.exists():
+                print(f"Warning: Split file not found: {split_file_path}")
+                continue
+            
+            # Determine arch from filename
+            arch = 'lower' if 'lower' in split_file else 'upper'
+            
+            with open(split_file_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    # Extract patient ID from line (e.g., "0EJDI7CW_lower.obj" -> "0EJDI7CW")
+                    patient_id = line.split('_')[0]
+                    
+                    # Construct path: arch/patient_id/patient_id_arch.obj
+                    obj_file = f"{patient_id}_{arch}.obj"
+                    obj_path = Path(self.data_root) / arch / patient_id / obj_file
+                    
+                    if obj_path.exists():
+                        # Store relative path from data_root
+                        rel_path = str(Path(arch) / patient_id / obj_file)
+                        file_list.append(rel_path)
+                    else:
+                        print(f"Warning: File not found: {obj_path}")
+        
+        print(f"Loaded {len(file_list)} samples from fold {self.fold}, split {self.split}")
+        
+        return file_list
+ 
+    def _load_obj(self, obj_path):
+        """Load OBJ file using trimesh with process=False to preserve vertex order."""
         try:
-            # Try loading the primary file
-            mesh = trimesh.load(stl_path, force='mesh')
+            mesh = trimesh.load(obj_path, process=False)
             points = mesh.vertices
             normals = mesh.vertex_normals
             return points.astype(np.float32), normals.astype(np.float32)
         except:
-            print(f"Couldn't load sample {stl_path}")
+            print(f"Couldn't load sample {obj_path}")
             raise
  
-
     def _load_json(self, json_path):
         with open(json_path, 'r') as f:
             data = json.load(f)
@@ -130,26 +138,27 @@ class IosDataset(DefaultDataset):
     
     def get_data(self, idx, testing=False):  
         file_rel_path = self.data_list[idx % len(self.data_list)]  
-        stl_path = os.path.join(self.data_root, file_rel_path)  
-        json_path = os.path.join(self.data_root, file_rel_path.replace(".stl", ".json"))
+        obj_path = os.path.join(self.data_root, file_rel_path)  
+        json_path = os.path.join(self.data_root, file_rel_path.replace(".obj", ".json"))
  
-        coord, normal = self._load_stl(stl_path)
+        coord, normal = self._load_obj(obj_path)
         if self.load_segment:
             segment = self._load_json(json_path)
-            assert segment.shape[0] == coord.shape[0], f"Segment shape not matching for sample {stl_path}"
+            assert segment.shape[0] == coord.shape[0], f"Segment shape {segment.shape[0]} != coord shape {coord.shape[0]} for sample {obj_path}"
         else:
             segment = np.zeros((coord.shape[0],), dtype=np.int32)
+        
         d = {
             "coord": coord,
             "normal": normal,
-            "name": Path(stl_path).stem,
-            "full_path": stl_path,
+            "name": Path(obj_path).stem,
+            "full_path": obj_path,
             "segment": segment
         }
         return d
- 
+    
     def prepare_test_data(self, idx):
-        data_dict = self.get_data(idx, testing=True)
+        data_dict = self.get_data(idx, testing=True)  
         # apply base transforms (same as training pipeline)
         data_dict = self.transform(data_dict)
  
@@ -157,7 +166,7 @@ class IosDataset(DefaultDataset):
         result_dict = dict(
             segment=data_dict.pop("segment"), 
             name=data_dict.get("name"),
-            full_path = data_dict.get("full_path")
+            full_path=data_dict.get("full_path")
         ) 
         # ==================================================
 
@@ -184,13 +193,13 @@ class IosDataset(DefaultDataset):
                 else:  
                     data_part = [data_part]
                 fragment_list += data_part
-        # here we can consider sampling just half of the fragments.
-        # It should work anyway. 
+        
         for i in range(len(fragment_list)):
             fragment_list[i] = self.post_transform(fragment_list[i])
         result_dict["fragment_list"] = fragment_list
         return result_dict
  
     def __len__(self):
-        if self.debug: return 2 # if debugging, run on just 2 samples
+        if self.debug: 
+            return 2  # if debugging, run on just 2 samples
         return len(self.data_list) * self.loop

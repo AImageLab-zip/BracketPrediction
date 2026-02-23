@@ -1,14 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=IOS_segmentator_train_BS32
+#SBATCH --job-name=PTV3_Teeth3DS_miccai
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
-#SBATCH --constraint="gpu_L40S_48G|gpu_A40_48G|gpu_RTX5000_16G|gpu_RTXA5000_24G|gpu_RTX6000_24G|gpu_2080Ti_11G"
+#SBATCH --constraint="gpu_A40_45G|gpu_L40S_45G|gpu_RTX6000_24G|gpu_RTX_A5000_24G"
 #SBATCH --account=grana_maxillo
 #SBATCH --partition=all_usr_prod
 #SBATCH --time=24:00:00
-#SBATCH --mem=60GB
+#SBATCH --mem=80GB
 #SBATCH --output=logs/train_%j.out
 #SBATCH --error=logs/train_%j.err
 
@@ -23,9 +23,9 @@ source /homes/mlugli/BracketPrediction/pointcept-brackets-venv/bin/activate
 export PYTHONPATH=./
 
 # Configuration
-CONFIG="configs/brackets/Pt_semseg_debug.py"
-EXP_NAME="Pt_semseg_BS32_gum"
+CONFIG="configs/brackets/Pt_semseg_teeth3ds.py"
+EXP_NAME="Pt_semseg_025"
 NUM_GPU=1
 
 # Training command
-python tools/train.py --config-file ${CONFIG} --num-gpus ${NUM_GPU} --options save_path=exp/brackets/${EXP_NAME}
+python tools/train.py --config-file ${CONFIG} --num-gpus ${NUM_GPU} --options save_path=exp/miccai/semseg/${EXP_NAME}

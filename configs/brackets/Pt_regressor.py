@@ -119,7 +119,7 @@ data = dict(
             ),
             dict(type="ToTensor"),
             dict(
-                type="Collect",  
+                type="Collect",
                 keys=["coord", "grid_coord", "bracket", "incisal", "outer", "name"],
                 feat_keys=feat_keys,  
             ),

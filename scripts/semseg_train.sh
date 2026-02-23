@@ -24,7 +24,7 @@ export PYTHONPATH=./
 
 # Configuration
 CONFIG="configs/brackets/Pt_semseg.py"
-EXP_NAME="Pt_semseg_BS16_lowLR_noAug_gs001"
+EXP_NAME="Pt_semseg_train_aug"
 NUM_GPU=1
 
 # Training command

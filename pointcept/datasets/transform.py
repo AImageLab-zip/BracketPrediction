@@ -418,6 +418,29 @@ class RandomFlip(object):
             if "normal" in data_dict.keys():
                 data_dict["normal"][:, 1] = -data_dict["normal"][:, 1]
         return data_dict
+
+@TRANSFORMS.register_module()
+class ExtendedRandomFlip(object):
+    def __init__(self, p=0.5):
+        self.p = p
+
+    def __call__(self, data_dict):
+        if np.random.rand() < self.p:
+            if "coord" in data_dict.keys():
+                data_dict["coord"][:, 0] = -data_dict["coord"][:, 0]
+            if "normal" in data_dict.keys():
+                data_dict["normal"][:, 0] = -data_dict["normal"][:, 0]
+        if np.random.rand() < self.p:
+            if "coord" in data_dict.keys():
+                data_dict["coord"][:, 1] = -data_dict["coord"][:, 1]
+            if "normal" in data_dict.keys():
+                data_dict["normal"][:, 1] = -data_dict["normal"][:, 1]
+        if np.random.rand() < self.p:
+            if "coord" in data_dict.keys():
+                data_dict["coord"][:, 2] = -data_dict["coord"][:, 2]
+            if "normal" in data_dict.keys():
+                data_dict["normal"][:, 2] = -data_dict["normal"][:, 2]
+        return data_dict
     
 @TRANSFORMS.register_module()
 class CustomRandomFlip(object):
