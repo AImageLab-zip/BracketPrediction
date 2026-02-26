@@ -22,21 +22,33 @@ wandb_project = "bracket_point_prediction"
 # -----------------------------
 # Model settings
 # ----------------------------- 
-model = dict(    
-    type="HeatmapRegressor",    
-    backbone=dict(    
-        type="PT-v3m1",    
-        in_channels=3,  # xyz only  
-        enc_depths=(2, 2, 2, 6, 2),
-        enc_channels=(32, 64, 128, 256, 512),
-        enc_num_head=(2, 4, 8, 16, 32),
-        dec_depths=(2, 2, 2, 2),
-        dec_channels=(64, 64, 128, 256),
-        dec_num_head=(4, 4, 8, 16),
-        mlp_ratio=4,
-        enable_flash=False,
-        cls_mode=False,
-    ),    
+model = dict(
+    type="HeatmapRegressor",
+    backbone=dict(
+        type="PT-v2m2",
+        in_channels=3,
+        num_classes=64, # HeatmapRegressor takes care of final projection
+        patch_embed_depth=1,
+        patch_embed_channels=48,
+        patch_embed_groups=6,
+        patch_embed_neighbours=16,
+        enc_depths=(2, 6, 2),
+        enc_channels=(96, 192, 384),
+        enc_groups=(12, 24, 48),
+        enc_neighbours=(16, 16, 16),
+        dec_depths=(1, 1, 1),
+        dec_channels=(48, 96, 192),
+        dec_groups=(6, 12, 24),
+        dec_neighbours=(16, 16, 16),
+        grid_sizes=(0.1, 0.2, 0.4),
+        attn_qkv_bias=True,
+        pe_multiplier=False,
+        pe_bias=True,
+        attn_drop_rate=0.0,
+        drop_path_rate=0.3,
+        enable_checkpoint=False,
+        unpool_backend="interp",
+    ),
     backbone_out_channels=64,
 )
   
@@ -137,16 +149,13 @@ data = dict(
                 dict(type="Collect", keys=("coord", "grid_coord", "index", "inverse"), feat_keys=feat_keys),
             ],
             aug_transform=[
-                # FAST CONFIGURATION
-                #[dict(type='RandomRotate', angle=[-0.1, 0.1], axis='z', p=0.0)]
-                # MEDIUM CONFIGURATION
-                [dict(type='RandomRotate', angle=[-0.1, 0.1], axis='z', p=0.5)],
-                [dict(type='RandomRotate', angle=[-0.1, 0.1], axis='x', p=0.5)],
-                [dict(type='RandomRotate', angle=[-0.1, 0.1], axis='y', p=0.5)], 
-                # SLOW CONFIGURATION
+                # LOW
+                [dict(type='RandomRotate', angle=[-0.1, 0.1], axis='z', p=0.0)]
+                # MEDIUM
                 #[dict(type='RandomRotate', angle=[-0.1, 0.1], axis='z', p=0.5)],
                 #[dict(type='RandomRotate', angle=[-0.1, 0.1], axis='x', p=0.5)],
                 #[dict(type='RandomRotate', angle=[-0.1, 0.1], axis='y', p=0.5)], 
+                # HIGH
                 #[dict(type='RandomScale', scale=[0.9, 1.1])],
                 #[dict(type='RandomFlip', p=0.5)],
                 #[dict(type='RandomShift', shift=((-0.05, 0.05), (-0.05, 0.05), (-0.05, 0.05)))]

@@ -15,7 +15,7 @@ class HeatmapRegressor(nn.Module):
         self.regression_head = nn.Linear(backbone_out_channels, 3)  
       
     def forward(self, data_dict):  
-        point = self.backbone(data_dict)  
+        point = self.backbone(data_dict)
           
         # Handle Point structure from PT-v3  
         if isinstance(point, Point):  
