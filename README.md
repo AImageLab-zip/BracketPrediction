@@ -108,11 +108,9 @@ python tools/train.py --config-file configs/brackets/Pt_regressor.py --num-gpus 
 ### Testing
 Example testing command:
 ```bash
-python tools/test.py --config-file /homes/mlugli/BracketPrediction/configs/brackets/Pt_regressor.py --options save_path=/homes/mlugli/BracketPrediction/exp/brackets/debug weight=/homes/mlugli/BracketPrediction/exp/brackets/debug/model/model_best.pth
+python tools/test.py --config-file /homes/mlugli/BracketPrediction/configs/brackets/Pt_regressor.py --options save_path=/homes/mlugli/BracketPrediction/exp/brackets/debug weight=/homes/mlugli/BracketPrediction/exp/brackets/debug/model/model_best.pth data.train.fold=1 data.val.fold=1 data.test.fold=1
 ```
 ## 🧰 Utils
 Some files you can find usefull:
 + A python [script](generate_test_scripts.py) to generate slurm scripts for 5-fold cross validating multiple models;
 + A python [script](generate_train_script.py) to generate slurm scripts to launch testing for your trained models;
-## 🐋 Production
-WIP
