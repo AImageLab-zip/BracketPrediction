@@ -8,7 +8,7 @@ import pyvista as pv
 from matplotlib import cm
 
 
-def plot_teeth(bracket:np.ndarray, incisal:np.ndarray, outer:np.ndarray, 
+def plot_teeth(points_dict: dict, 
                v_io:np.ndarray, v_perp:np.ndarray,
                vertices:np.ndarray, 
                patient_id:str, fdi:int,
@@ -21,6 +21,10 @@ def plot_teeth(bracket:np.ndarray, incisal:np.ndarray, outer:np.ndarray,
     t = np.linspace(-plane_size, plane_size, plane_res)
     ss, tt = np.meshgrid(s, t)
 
+    bracket = points_dict.get('Bracket')
+    if bracket is None:
+        print("No bracket point for plane")
+        return
     plane_points = bracket + ss[..., None] * v_io + tt[..., None] * v_perp
     plane_points = plane_points.reshape(-1, 3)
 
@@ -29,12 +33,30 @@ def plot_teeth(bracket:np.ndarray, incisal:np.ndarray, outer:np.ndarray,
     axes[1].scatter(plane_points[:, 0], plane_points[:, 2], c='gray', s=5, alpha=0.5)
     axes[2].scatter(plane_points[:, 1], plane_points[:, 2], c='gray', s=5, alpha=0.5)
 
+    # Define styles for each point type
+    point_styles = {
+        'Bracket': {'color': 'orange', 'marker': 'o', 'label': 'Bracket'},
+        'Incisal': {'color': 'cyan', 'marker': 's', 'label': 'Incisal'},
+        'Gingival': {'color': 'green', 'marker': 'D', 'label': 'Gingival'},
+        'Mesial': {'color': 'purple', 'marker': 'v', 'label': 'Mesial'},
+        'Distal': {'color': 'brown', 'marker': '^', 'label': 'Distal'},
+        'Inner': {'color': 'pink', 'marker': 'P', 'label': 'Inner'},
+        'Planar': {'color': 'red', 'marker': '*', 'label': 'Planar'},
+        'Cusp': {'color': 'blue', 'marker': 'X', 'label': 'Cusp'},
+    }
+
     # View 1: XY plane (looking down Z-axis)
     ax = axes[0]
     ax.scatter(vertices[:, 0], vertices[:, 1], c='lightblue', s=3, alpha=0.3, label='Mesh')
-    ax.scatter(bracket[0], bracket[1], c='orange', s=100, marker='o', edgecolors='black', linewidths=2, label='Bracket', zorder=5)
-    ax.scatter(incisal[0], incisal[1], c='cyan', s=100, marker='s', edgecolors='black', linewidths=2, label='Incisal', zorder=5)
-    ax.scatter(outer[0], outer[1], c='salmon', s=100, marker='^', edgecolors='black', linewidths=2, label='Outer', zorder=5)
+    for name, points in points_dict.items():
+        if name in point_styles:
+            style = point_styles[name]
+            if isinstance(points, list):
+                for p in points:
+                    ax.scatter(p[0], p[1], c=style['color'], s=100, marker=style['marker'], edgecolors='black', linewidths=2, label=style['label'], zorder=5)
+                    style['label'] = None  # only label once
+            else:
+                ax.scatter(points[0], points[1], c=style['color'], s=100, marker=style['marker'], edgecolors='black', linewidths=2, label=style['label'], zorder=5)
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_title('XY View (Top)')
@@ -45,9 +67,15 @@ def plot_teeth(bracket:np.ndarray, incisal:np.ndarray, outer:np.ndarray,
     # View 2: XZ plane (looking from Y-axis)
     ax = axes[1]
     ax.scatter(vertices[:, 0], vertices[:, 2], c='lightblue', s=3, alpha=0.3, label='Mesh')
-    ax.scatter(bracket[0], bracket[2], c='orange', s=100, marker='o', edgecolors='black', linewidths=2, label='Bracket', zorder=5)
-    ax.scatter(incisal[0], incisal[2], c='cyan', s=100, marker='s', edgecolors='black', linewidths=2, label='Incisal', zorder=5)
-    ax.scatter(outer[0], outer[2], c='salmon', s=100, marker='^', edgecolors='black', linewidths=2, label='Outer', zorder=5)
+    for name, points in points_dict.items():
+        if name in point_styles:
+            style = point_styles[name]
+            if isinstance(points, list):
+                for p in points:
+                    ax.scatter(p[0], p[2], c=style['color'], s=100, marker=style['marker'], edgecolors='black', linewidths=2, label=style['label'], zorder=5)
+                    style['label'] = None
+            else:
+                ax.scatter(points[0], points[2], c=style['color'], s=100, marker=style['marker'], edgecolors='black', linewidths=2, label=style['label'], zorder=5)
     ax.set_xlabel('X')
     ax.set_ylabel('Z')
     ax.set_title('XZ View (Front)')
@@ -58,9 +86,15 @@ def plot_teeth(bracket:np.ndarray, incisal:np.ndarray, outer:np.ndarray,
     # View 3: YZ plane (looking from X-axis)
     ax = axes[2]
     ax.scatter(vertices[:, 1], vertices[:, 2], c='lightblue', s=3, alpha=0.3, label='Mesh')
-    ax.scatter(bracket[1], bracket[2], c='orange', s=100, marker='o', edgecolors='black', linewidths=2, label='Bracket', zorder=5)
-    ax.scatter(incisal[1], incisal[2], c='cyan', s=100, marker='s', edgecolors='black', linewidths=2, label='Incisal', zorder=5)
-    ax.scatter(outer[1], outer[2], c='salmon', s=100, marker='^', edgecolors='black', linewidths=2, label='Outer', zorder=5)
+    for name, points in points_dict.items():
+        if name in point_styles:
+            style = point_styles[name]
+            if isinstance(points, list):
+                for p in points:
+                    ax.scatter(p[1], p[2], c=style['color'], s=100, marker=style['marker'], edgecolors='black', linewidths=2, label=style['label'], zorder=5)
+                    style['label'] = None
+            else:
+                ax.scatter(points[1], points[2], c=style['color'], s=100, marker=style['marker'], edgecolors='black', linewidths=2, label=style['label'], zorder=5)
     ax.set_xlabel('Y')
     ax.set_ylabel('Z')
     ax.set_title('YZ View (Side)')
@@ -170,6 +204,7 @@ def plot_jaw(data_folder:Path, raw_scan:bool = False):
         axes[2].scatter(vertices[:, 1], vertices[:, 2], c='lightgray', s=1, alpha=0.7)
 
         colors = plt.get_cmap('tab20')(np.linspace(0, 1, len(teeth_data)))
+        legend_added = False  # Track if we've added point type legend
         for idx, (fdi, points_data) in enumerate(teeth_data):
             color = colors[idx]
             incisal = np.array(points_data.get('incisal', [0, 0, 0]))
@@ -179,18 +214,34 @@ def plot_jaw(data_folder:Path, raw_scan:bool = False):
             x_axis = np.array(base_plane.get('xAxis', [0, 0, 0]))
             y_axis = np.array(base_plane.get('yAxis', [0, 0, 0]))
 
-            # Plot points
-            axes[0].scatter(incisal[0], incisal[1], c=[color], s=100, marker='s',edgecolors='black', linewidths=1.5, label=f'FDI {fdi}', zorder=5)
-            axes[1].scatter(incisal[0], incisal[2], c=[color], s=100, marker='s', edgecolors='black', linewidths=1.5, zorder=5)
-            axes[2].scatter(incisal[1], incisal[2], c=[color], s=100, marker='s', edgecolors='black', linewidths=1.5, zorder=5)
-
-            axes[0].scatter(outer[0], outer[1], c=[color], s=100, marker='^', edgecolors='black', linewidths=1.5, alpha=0.7, zorder=5)
-            axes[1].scatter(outer[0], outer[2], c=[color], s=100, marker='^', edgecolors='black', linewidths=1.5, alpha=0.7, zorder=5)
-            axes[2].scatter(outer[1], outer[2], c=[color], s=100, marker='^', edgecolors='black', linewidths=1.5, alpha=0.7, zorder=5)
-
-            axes[0].scatter(origin[0], origin[1], c=[color], s=120, marker='o', edgecolors='black', linewidths=2, zorder=5)
+            # Plot bracket point (origin of the plane)
+            label_bracket = 'Bracket' if not legend_added else None
+            axes[0].scatter(origin[0], origin[1], c=[color], s=120, marker='o', edgecolors='black', linewidths=2, label=label_bracket, zorder=5)
             axes[1].scatter(origin[0], origin[2], c=[color], s=120, marker='o', edgecolors='black', linewidths=2, zorder=5)
             axes[2].scatter(origin[1], origin[2], c=[color], s=120, marker='o', edgecolors='black', linewidths=2, zorder=5)
+
+            # Plot mesial and distal points if they exist
+            if 'mesial' in points_data and points_data['mesial'] is not None:
+                mesial_pt = np.array(points_data['mesial'])
+                label_mesial = 'Mesial' if not legend_added else None
+                axes[0].scatter(mesial_pt[0], mesial_pt[1], c=[color], s=80, marker='v', 
+                               edgecolors='black', linewidths=1, alpha=0.7, label=label_mesial, zorder=4)
+                axes[1].scatter(mesial_pt[0], mesial_pt[2], c=[color], s=80, marker='v', 
+                               edgecolors='black', linewidths=1, alpha=0.7, zorder=4)
+                axes[2].scatter(mesial_pt[1], mesial_pt[2], c=[color], s=80, marker='v', 
+                               edgecolors='black', linewidths=1, alpha=0.7, zorder=4)
+            
+            if 'distal' in points_data and points_data['distal'] is not None:
+                distal_pt = np.array(points_data['distal'])
+                label_distal = 'Distal' if not legend_added else None
+                axes[0].scatter(distal_pt[0], distal_pt[1], c=[color], s=80, marker='^', 
+                               edgecolors='black', linewidths=1, alpha=0.7, label=label_distal, zorder=4)
+                axes[1].scatter(distal_pt[0], distal_pt[2], c=[color], s=80, marker='^', 
+                               edgecolors='black', linewidths=1, alpha=0.7, zorder=4)
+                axes[2].scatter(distal_pt[1], distal_pt[2], c=[color], s=80, marker='^', 
+                               edgecolors='black', linewidths=1, alpha=0.7, zorder=4)
+            
+            legend_added = True
 
             # plot base plane
             v_x = x_axis - origin
@@ -213,7 +264,28 @@ def plot_jaw(data_folder:Path, raw_scan:bool = False):
         axes[0].set_xlabel('X', fontsize=12)
         axes[0].set_ylabel('Y', fontsize=12)
         axes[0].set_title('XY View (Top)', fontsize=14, fontweight='bold')
-        axes[0].legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+        
+        # Add legend for point types
+        from matplotlib.lines import Line2D
+        point_type_elements = [
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', markersize=8, 
+                   markeredgecolor='black', markeredgewidth=1.5, label='Bracket'),
+            Line2D([0], [0], marker='v', color='w', markerfacecolor='gray', markersize=7, 
+                   markeredgecolor='black', markeredgewidth=1, label='Mesial'),
+            Line2D([0], [0], marker='^', color='w', markerfacecolor='gray', markersize=7, 
+                   markeredgecolor='black', markeredgewidth=1, label='Distal'),
+        ]
+        legend1 = axes[0].legend(handles=point_type_elements, loc='upper left', fontsize=10, 
+                                title='Point Types', title_fontsize=11, frameon=True)
+        axes[0].add_artist(legend1)
+        
+        # Add legend for FDI numbers (tooth colors)
+        fdi_elements = [plt.scatter([], [], c=[colors[idx]], s=100, marker='o', 
+                                   edgecolors='black', linewidths=2, label=f'FDI {fdi}')
+                       for idx, (fdi, _) in enumerate(teeth_data)]
+        axes[0].legend(handles=fdi_elements, bbox_to_anchor=(1.05, 1), loc='upper left', 
+                      fontsize=8, title='Teeth', title_fontsize=9, frameon=True)
+        
         axes[0].grid(True, alpha=0.3)
         axes[0].set_aspect('equal', adjustable='box')
 

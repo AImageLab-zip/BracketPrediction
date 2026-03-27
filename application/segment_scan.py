@@ -34,6 +34,7 @@ from pointcept.engines.launch import launch
 import numpy as np
 import json
 import torch
+from scipy.spatial import cKDTree
 
 
 def normalize(points: np.ndarray, flip:bool=False) -> tuple[np.ndarray, np.ndarray, float]:
@@ -63,6 +64,29 @@ def normalize(points: np.ndarray, flip:bool=False) -> tuple[np.ndarray, np.ndarr
     normalized_points = centered_points * scale
     
     return normalized_points, centroid, scale
+
+
+def compute_dilation_masks(mask: np.ndarray, vertices: np.ndarray) -> dict[int, np.ndarray]:
+    tooth_labels = np.unique(mask)
+    tooth_labels = tooth_labels[tooth_labels != 0]
+    verts = vertices.astype(np.float32)
+
+    result = {}
+    for label in tooth_labels:
+        tooth_verts = verts[mask == label]
+        if len(tooth_verts) == 0:
+            continue
+
+        bbox_min = tooth_verts.min(axis=0)
+        bbox_max = tooth_verts.max(axis=0)
+        tooth_size = np.linalg.norm(bbox_max - bbox_min)
+
+        dilation_radius = 0.05 * tooth_size  # tune this
+        tree = cKDTree(tooth_verts)
+        dists, _ = tree.query(verts, workers=-1)
+        result[label] = dists <= dilation_radius
+
+    return result
 
 
 def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path, visualize: bool = True):
@@ -101,19 +125,24 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path, 
     faces = mesh.faces.reshape(-1, 4)[:, 1:]  # Remove the '3' prefix from each face
     print(f"Found {len(unique_fdi_indices)} unique classes: {unique_fdi_indices}")
 
+    # Compute dilation masks for including gum around teeth
+    dilation_masks = compute_dilation_masks(mask, points)
+
     # Process teeth 
     for fdi_index in unique_fdi_indices:
         if fdi_index == 0:
             continue  # Skip gum
         
         # Create folder for this FDI index
-        # Get points belonging to this tooth
-        class_mask = mask == fdi_index
-        class_indices = np.where(class_mask)[0]
+        # Get points belonging to this tooth and nearby gum
+        tooth_mask = mask == fdi_index
+        gum_mask = (mask == 0) & dilation_masks[fdi_index]
+        combined_mask = tooth_mask | gum_mask
+        class_indices = np.where(combined_mask)[0]
         if len(class_indices) == 0:
             continue
         
-        class_points = points[class_mask]
+        class_points = points[combined_mask]
         normalized_class_points, translation, scale = normalize(class_points, "upper" in base_name)
         
         face_mask = np.all(np.isin(faces, class_indices), axis=1)

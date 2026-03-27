@@ -1775,7 +1775,7 @@ class HeatmapTesterV2(TesterBase):
         front_left =  [21, 22, 31, 32]
         front_right = [11, 12, 41, 42]
         file_name = Path(full_path).stem
-        ide, arch, _, FDI = file_name.split("_")
+        _, arch, ide, _, FDI = file_name.split("_")
         FDI = int(FDI)
         mesial = channels_proposals["Mesial"]
         distal = channels_proposals["Distal"]

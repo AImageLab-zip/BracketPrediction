@@ -39,6 +39,13 @@ def process_tooth_predictions(mesh,
                               output_dir:Path, 
                               tooth_key:str, 
                               teeth_path:Path, 
+                              gingival_pred:np.ndarray = None,
+                              mesial_pred:np.ndarray = None,
+                              distal_pred:np.ndarray = None,
+                              inner_pred:np.ndarray = None,
+                              facial_pred:np.ndarray = None,
+                              planar_pred:list = None,
+                              cusp_pred:list = None,
                               visualize:bool = True):
     """
     Creates three 2D views (XY, XZ, YZ) of the mesh with predicted points.
@@ -52,6 +59,15 @@ def process_tooth_predictions(mesh,
         fdi: FDI tooth index
         output_dir: directory to save the PNG file
         teeth_path: path to the teeth directory containing transformation JSON files
+        tooth_key: key for the tooth
+        gingival_pred: gingival point coordinates [x, y, z]
+        mesial_pred: mesial point coordinates [x, y, z]
+        distal_pred: distal point coordinates [x, y, z]
+        inner_pred: inner point coordinates [x, y, z]
+        facial_pred: facial point coordinates [x, y, z]
+        planar_pred: list of planar points
+        cusp_pred: list of cusp points
+        visualize: whether to generate visualizations
     """
     import trimesh
     from visualizers import plot_teeth
@@ -72,20 +88,44 @@ def process_tooth_predictions(mesh,
         scaling = float(transform_data.get('scaling', 1.0))
         print(f"  Loaded transformation for {tooth_key}: translation={translation}, scaling={scaling}")
 
-    # ========= Project point on surface =============
-    predictions = [bracket_pred, incisal_pred, outer_pred]
-    face_ids = []
-    projected_points = []
-    for pred in predictions:
+    # ========= Use the predicted points directly (already on mesh) =============
+    projected = {}
+    single_points = [
+        ('Bracket', bracket_pred),
+        ('Incisal', incisal_pred),
+        ('Outer', outer_pred),
+        ('Gingival', gingival_pred),
+        ('Mesial', mesial_pred),
+        ('Distal', distal_pred),
+        ('Inner', inner_pred),
+        ('Facial', facial_pred),
+    ]
+    for name, pred in single_points:
+        if pred is not None:
+            projected[name] = np.array(pred)
+    
+    # Use planar and cusp lists directly
+    if planar_pred:
+        projected['Planar'] = [np.array(p) for p in planar_pred]
+    
+    if cusp_pred:
+        projected['Cusp'] = [np.array(p) for p in cusp_pred]
+    
+    bracket = projected.get('Bracket')
+    incisal = projected.get('Incisal')
+    outer = projected.get('Outer')
+    if bracket is None or incisal is None or outer is None:
+        print(f"⚠️ Missing essential points for tooth {fdi}")
+        return None
+
+    # Find face for bracket to get normal
+    bracket_face_id = None
+    if bracket is not None:
         try:
-            closest_points, distance, faces = mesh.nearest.on_surface([np.array(pred)])
+            _, _, faces = mesh.nearest.on_surface([bracket])
+            bracket_face_id = faces
         except:
-            print(f"⚠️ Projection on mesh failed for tooth {fdi}")
-            return None
-        face_ids.append(faces)
-        projected_points.append(closest_points[0])
-    bracket, incisal, outer = projected_points
-    bracket_face_id, _, _ = face_ids
+            pass
 
     json_data = None
 
@@ -102,7 +142,10 @@ def process_tooth_predictions(mesh,
         nearby_normals = mesh.vertex_normals[nearby_indices]
         v_normal = np.mean(nearby_normals, axis=0)
     else:
-        v_normal = mesh.face_normals[bracket_face_id[0]]
+        if bracket_face_id is not None:
+            v_normal = mesh.face_normals[bracket_face_id[0]]
+        else:
+            v_normal = np.array([0, 0, 1])  # default
 
     v_normal = v_normal / np.linalg.norm(v_normal)
 
@@ -113,39 +156,105 @@ def process_tooth_predictions(mesh,
     # Get perpendicular axis to define plane
     v_perp = np.cross(v_normal, v_io)
     v_perp = v_perp / np.linalg.norm(v_perp)
+        # For molars, fit plane from planar points instead
+    molars = [16,17,18,26,27,28,36,37,38,46,47,48]
+    if fdi in molars and 'Planar' in projected and len(projected['Planar']) == 4:
+        try:
+            # Fit plane to the 4 planar points
+            planar_pts = np.array(projected['Planar'])
+            # Center the points
+            center = np.mean(planar_pts, axis=0)
+            centered = planar_pts - center
+            # SVD to find best fit plane
+            U, S, Vt = np.linalg.svd(centered)
+            # Normal is the direction with smallest singular value
+            v_normal = Vt[2]
+            v_normal = v_normal / np.linalg.norm(v_normal)
+            # Get two orthogonal vectors in the plane
+            v1 = Vt[0]
+            v1 = v1 / np.linalg.norm(v1)
+            v2 = Vt[1]
+            v2 = v2 / np.linalg.norm(v2)
+            v_io = v1
+            v_perp = v2
+        except Exception as e:
+            print(f"  ⚠️  Plane fitting failed for molar {fdi}: {e}")
+        # Apply inverse transformation: denormalize the points
+    denormalized = {}
+    for name, point in projected.items():
+        if isinstance(point, list):
+            # Keep as numpy arrays for now
+            denormalized[name] = [p / scaling + translation for p in point]
+        else:
+            denormalized[name] = point / scaling + translation
     
-    # Apply inverse transformation: denormalize the points
-
-    bracket_denorm = bracket / scaling + translation
-    incisal_denorm = incisal / scaling + translation
-    outer_denorm = outer / scaling + translation
+    # Denormalize vectors
     v_perp_denorm = v_perp / scaling
     v_normal_denorm = v_normal / scaling
+    
     if fdi <= 28:
         rotation_matrix = np.array([
             [-1, 0, 0],
             [0, 1, 0],
             [0, 0, -1]
         ])
-        bracket_denorm = bracket_denorm @ rotation_matrix.T
-        incisal_denorm = incisal_denorm @ rotation_matrix.T
-        outer_denorm = outer_denorm @ rotation_matrix.T
-        v_perp_denorm = v_perp_denorm @ rotation_matrix.T
-        v_normal_denorm = v_normal_denorm @ rotation_matrix.T
+        for name, point in denormalized.items():
+            if isinstance(point, list):
+                denormalized[name] = [(p @ rotation_matrix.T).tolist() for p in point]
+            else:
+                denormalized[name] = (point @ rotation_matrix.T).tolist()
+        v_perp_denorm = (v_perp_denorm @ rotation_matrix.T).tolist()
+        v_normal_denorm = (v_normal_denorm @ rotation_matrix.T).tolist()
+    else:
+        # Convert arrays to lists (no rotation needed)
+        for name, point in denormalized.items():
+            if isinstance(point, list):
+                denormalized[name] = [p.tolist() for p in point]
+            else:
+                denormalized[name] = point.tolist()
+        v_perp_denorm = v_perp_denorm.tolist() if hasattr(v_perp_denorm, 'tolist') else v_perp_denorm
+        v_normal_denorm = v_normal_denorm.tolist() if hasattr(v_normal_denorm, 'tolist') else v_normal_denorm
     
     json_data = {
-        "incisal": incisal_denorm.tolist(),
-        "outer": outer_denorm.tolist(),
+        "bracket": denormalized.get('Bracket'),
+        "incisal": denormalized.get('Incisal'),
+        "outer": denormalized.get('Outer'),
+        "gingival": denormalized.get('Gingival'),
+        "mesial": denormalized.get('Mesial'),
+        "distal": denormalized.get('Distal'),
+        "inner": denormalized.get('Inner'),
+        "facial": denormalized.get('Facial'),
         "basePlane": {
-            "origin": bracket_denorm.tolist(),
-            "xAxis": incisal_denorm.tolist(),
-            "yAxis": (bracket_denorm + v_perp_denorm).tolist(),
-            "zAxis": (bracket_denorm + v_normal_denorm).tolist(),
+            "origin": denormalized.get('Bracket'),
+            "xAxis": denormalized.get('Incisal'),
+            "yAxis": (np.array(denormalized.get('Bracket')) + v_perp_denorm).tolist(),
+            "zAxis": (np.array(denormalized.get('Bracket')) + v_normal_denorm).tolist(),
         },
     }
+    
+    # Add cusps for molars and premolars
+    molars_premolars = [14,15,16,17,24,25,26,27,34,35,36,37,44,45,46,47]
+    if fdi in molars_premolars and 'Cusp' in denormalized:
+        json_data["cusps"] = denormalized['Cusp']
+    
+    # Add planar for molars
+    molars = [16,17,26,27,36,37,46,47]
+    if fdi in molars and 'Planar' in denormalized:
+        json_data["planar"] = denormalized['Planar']
+    # Filter points for visualization based on tooth type
+    plot_points = {k: v for k, v in projected.items() if k not in ['Facial', 'Outer']}
+    # Only show planar for molars
+    molars = [16,17,18,26,27,28,36,37,38,46,47,48]
+    if fdi not in molars and 'Planar' in plot_points:
+        del plot_points['Planar']
+    # Only show cusps for molars and premolars
+    molars_premolars = [14,15,16,17,18,24,25,26,27,28,34,35,36,37,38,44,45,46,47,48]
+    if fdi not in molars_premolars and 'Cusp' in plot_points:
+        del plot_points['Cusp']
+    
     if visualize:
         try:
-            plot_teeth(bracket, incisal, outer, v_io, v_perp,
+            plot_teeth(plot_points, v_io, v_perp,
                        vertices, patient_id, fdi, output_dir)
         except Exception as e:
             print(f"  ⚠️  Tooth visualization failed: {e}")
@@ -180,11 +289,17 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
         fdi = int(parts[fdi_idx + 1])
         stl_file = teeth_path / f"{tooth_key}.stl"
         mesh = trimesh.load_mesh(stl_file)
- 
-        # Get predictions
-        bracket_pred = predictions.get('bracket')
-        incisal_pred = predictions.get('incisal')
-        outer_pred = predictions.get('outer')
+         
+        bracket_pred = predictions.get('Bracket')
+        incisal_pred = predictions.get('Incisal')
+        outer_pred = predictions.get('OuterPoint')
+        gingival_pred = predictions.get('Gingival')
+        mesial_pred = predictions.get('Mesial')
+        distal_pred = predictions.get('Distal')
+        inner_pred = predictions.get('InnerPoint')
+        facial_pred = predictions.get('FacialPoint')
+        planar_pred = predictions.get('Planar')
+        cusp_pred = predictions.get('Cusp')
  
         # Process single tooth predictions to
         # bring them back to normalized coordinates
@@ -193,6 +308,13 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
             bracket_pred=bracket_pred,
             incisal_pred=incisal_pred,
             outer_pred=outer_pred,
+            gingival_pred=gingival_pred,
+            mesial_pred=mesial_pred,
+            distal_pred=distal_pred,
+            inner_pred=inner_pred,
+            facial_pred=facial_pred,
+            planar_pred=planar_pred,
+            cusp_pred=cusp_pred,
             patient_id=patient_id,
             fdi=fdi,
             output_dir=viz_dir,
@@ -260,7 +382,8 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
                 yaxis = trimesh.transformations.transform_points([yaxis], rotation)[0]
                 zaxis = trimesh.transformations.transform_points([zaxis], rotation)[0]
 
-            rotated_points[tooth_key] = {
+            # Copy all new points with rotation
+            rotated_entry = {
                 'incisal': incisal.tolist(),
                 'outer': outer.tolist(),
                 'basePlane': {
@@ -270,6 +393,68 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
                     'zAxis': zaxis.tolist(),
                 }
             }
+            
+            # Add optional points if they exist
+            for key in ['gingival', 'mesial', 'distal', 'inner', 'facial', 'bracket']:
+                if key in pdata and pdata[key] is not None:
+                    try:
+                        pt = np.array(pdata[key]) + shift
+                        for axis, degrees in seq:
+                            radians = np.deg2rad(degrees)
+                            if axis == 'x':
+                                rotation = trimesh.transformations.rotation_matrix(radians, [1, 0, 0])
+                            elif axis == 'y':
+                                rotation = trimesh.transformations.rotation_matrix(radians, [0, 1, 0])
+                            else:
+                                rotation = trimesh.transformations.rotation_matrix(radians, [0, 0, 1])
+                            pt = trimesh.transformations.transform_points([pt], rotation)[0]
+                        rotated_entry[key] = pt.tolist()
+                    except:
+                        pass
+            
+            # Add cusps for molars/premolars and planar for molars
+            molars_premolars = [14,15,16,17,18,24,25,26,27,28,34,35,36,37,38,44,45,46,47,48]
+            molars = [16,17,18,26,27,28,36,37,38,46,47,48]
+            
+            if fdi in molars_premolars and 'cusps' in pdata:
+                try:
+                    cusps_rot = []
+                    for cusp_pt in pdata['cusps']:
+                        pt = np.array(cusp_pt) + shift
+                        for axis, degrees in seq:
+                            radians = np.deg2rad(degrees)
+                            if axis == 'x':
+                                rotation = trimesh.transformations.rotation_matrix(radians, [1, 0, 0])
+                            elif axis == 'y':
+                                rotation = trimesh.transformations.rotation_matrix(radians, [0, 1, 0])
+                            else:
+                                rotation = trimesh.transformations.rotation_matrix(radians, [0, 0, 1])
+                            pt = trimesh.transformations.transform_points([pt], rotation)[0]
+                        cusps_rot.append(pt.tolist())
+                    rotated_entry['cusps'] = cusps_rot
+                except:
+                    pass
+            
+            if fdi in molars and 'planar' in pdata:
+                try:
+                    planar_rot = []
+                    for planar_pt in pdata['planar']:
+                        pt = np.array(planar_pt) + shift
+                        for axis, degrees in seq:
+                            radians = np.deg2rad(degrees)
+                            if axis == 'x':
+                                rotation = trimesh.transformations.rotation_matrix(radians, [1, 0, 0])
+                            elif axis == 'y':
+                                rotation = trimesh.transformations.rotation_matrix(radians, [0, 1, 0])
+                            else:
+                                rotation = trimesh.transformations.rotation_matrix(radians, [0, 0, 1])
+                            pt = trimesh.transformations.transform_points([pt], rotation)[0]
+                        planar_rot.append(pt.tolist())
+                    rotated_entry['planar'] = planar_rot
+                except:
+                    pass
+            
+            rotated_points[tooth_key] = rotated_entry
         except Exception as e:
             print(f"⚠️ Error rotating points for {tooth_key}: {e}")
 
