@@ -17,7 +17,7 @@ from pointcept.datasets.transform import TRANSFORMS
 @DATASETS.register_module()
 class BracketPointDataset(DefaultDataset):
     """
-    Dataset for predicting bracket_point from STL files.
+    Dataset for BracketsV1
     """
  
     def __init__(

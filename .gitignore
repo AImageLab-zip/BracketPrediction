@@ -20,3 +20,8 @@ submit_all_test_jobs.sh
 .idea
 */.DS_Store
 **/*.out
+Mlugli
+Teeth3DS
+
+exp_brackets
+exp_segmentation

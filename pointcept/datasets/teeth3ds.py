@@ -27,13 +27,13 @@ class IosDatasetTeeth3ds(DefaultDataset):
         data_root, # path to normalized_data folder containing lower/ and upper/ subfolders
         fold=None, # path to directory containing split files (training_lower.txt, validation_lower.txt, etc.)
         split="train",
-        debug=False,
         transform=None,
         test_mode=False,
         test_cfg=None,
         load_segment=True,
         loop=1,
         ignore_index=0,
+        debug=False,
     ):
         self.fold = fold
         super().__init__(
@@ -75,11 +75,16 @@ class IosDatasetTeeth3ds(DefaultDataset):
             'test': ['testing_lower.txt', 'testing_upper.txt']
         }
         
-        if self.split not in split_file_mapping:
-            raise ValueError(f"Invalid split: {self.split}. Must be one of {list(split_file_mapping.keys())}")
-        
-        split_files = split_file_mapping[self.split]
-        
+        #if self.split not in split_file_mapping:
+        #    raise ValueError(f"Invalid split: {self.split}. Must be one of {list(split_file_mapping.keys())}")
+        # you can specify multiple splits like ["train", "test"] 
+        single_splits = self.split.split()
+        split_files = []
+        for s in single_splits:
+            if s not in split_file_mapping:
+                raise ValueError(f"Invalid split: {self.split}. Must be one of {list(split_file_mapping.keys())}")
+            split_files += split_file_mapping[s]
+ 
         # Load filenames from split files
         file_list = []
         for split_file in split_files:
@@ -112,7 +117,7 @@ class IosDatasetTeeth3ds(DefaultDataset):
                         print(f"Warning: File not found: {obj_path}")
         
         print(f"Loaded {len(file_list)} samples from fold {self.fold}, split {self.split}")
-        
+  
         return file_list
  
     def _load_obj(self, obj_path):

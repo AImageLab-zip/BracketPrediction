@@ -77,10 +77,11 @@ scheduler = dict(
 dataset_type = "IosDatasetTeeth3ds"
 #data_root = "/homes/mlugli/BracketPrediction/data/original_data"
 data_root = "/homes/mlugli/BracketPrediction/data/normalized_data"
-feat_keys = ["coord"]  
+feat_keys = ["coord"]
 grid_size = 0.01
 #grid_size = 0.025
-fold = "/homes/mlugli/BracketPrediction/data/splits/Teeth3DS_train_val_test_split"
+#fold = "/homes/mlugli/BracketPrediction/data/splits/Teeth3DS_train_test_split_original"
+fold = "/homes/mlugli/BracketPrediction/data/splits/Teeth3DS_custom"
 
 data = dict(
     num_classes = num_classes,
@@ -117,8 +118,8 @@ data = dict(
                 feat_keys=feat_keys)
         ],
         test_mode=False
-    ), 
-    
+    ),
+
     val=dict(
         type=dataset_type,  
         split="val",  
@@ -144,14 +145,15 @@ data = dict(
             ),  
         ],  
         test_mode=False,  
-    ),  
-  
+    ),
+ 
     test=dict(    
         type=dataset_type,
-        split="test",
+        split="train test",
         fold=fold,
         data_root=data_root,
         ignore_index = ignore_index,
+        load_segment = False,
         transform=[
             #dict(type="NormalizeCoord"),
         ],

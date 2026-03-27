@@ -1,2 +1,3 @@
-from .bracket_point_model import LandmarkPredictor
-from .bracket_heatmap_seg import HeatmapRegressor
+from .bracket_point_model import LandmarksRegression
+from .bracket_heatmap_seg import LandmarksHeatmap
+from .landmarks import LandmarksHeatmapV2

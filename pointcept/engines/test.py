@@ -16,13 +16,15 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 import torch.utils.data
-
+import re
 from .defaults import create_ddp_model
 import pointcept.utils.comm as comm
 from pointcept.datasets import build_dataset, collate_fn
 from pointcept.models import build_model
 from pointcept.utils.logger import get_root_logger
 from pointcept.utils.registry import Registry
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
 from pointcept.utils.misc import (
     AverageMeter,
     intersection_and_union,
@@ -31,6 +33,7 @@ from pointcept.utils.misc import (
 )
 # custom import
 from pointcept.utils.bracket_mapper import BracketMapper
+from sklearn.cluster import KMeans
 
 try:
     import trimesh
@@ -1506,7 +1509,7 @@ class BracketTester_v2(TesterBase):
         return batch  # Don't collate, just return the list
 
 
-@TESTERS.register_module()    
+@TESTERS.register_module()
 class HeatmapTester(TesterBase):
     def test(self):
         assert self.test_loader.batch_size == 1    
@@ -1520,23 +1523,23 @@ class HeatmapTester(TesterBase):
  
         save_path = os.path.join(self.cfg.save_path, "results")    
         heatmap_path = os.path.join(save_path, "heatmaps")    
-        make_dirs(save_path)    
+        make_dirs(save_path)
         make_dirs(heatmap_path)    
  
         # Dictionary to store results in the format: sample_name -> [coord_x, coord_y, coord_z]
         all_results = {}
         self.channels = ['bracket', 'incisal', 'outer'] 
         for idx, data_dict in enumerate(self.test_loader):
-            start = time.time()    
-            data_dict = data_dict[0]    
-            fragment_list = data_dict.pop("fragment_list")    
-            segment = data_dict.pop("segment")    
+            start = time.time()
+            data_dict = data_dict[0]
+            fragment_list = data_dict.pop("fragment_list")
+            segment = data_dict.pop("segment")
             data_name = data_dict.pop("name")
 
             # bracket = data_dict.pop("bracket")  # Get bracket point if available
             # incisal = data_dict.pop("incisal")
             # outer = data_dict.pop("outer")
-    
+ 
             pred_save_path = os.path.join(heatmap_path, f"{data_name}_pred.npy")
             pred = torch.zeros(segment.shape[0], 3).cuda()    
 
@@ -1646,6 +1649,281 @@ class HeatmapTester(TesterBase):
         
         logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
  
+    @staticmethod
+    def collate_fn(batch):
+        return batch
+
+@TESTERS.register_module()
+class HeatmapTesterV2(TesterBase):
+    # Unified channel layout:
+    # 0: Bracket
+    # 1: Incisal
+    # 2: Gingival
+    # 3: Planar
+    # 4: Mesial
+    # 5: Distal
+    # 6: Cusp
+    # 7: InnerPoint
+    # 8: OuterPoint
+    # 9: FacialPoint
+
+    SINGLE_POINT_CHANNELS = {
+        0: "Bracket",
+        1: "Incisal",
+        2: "Gingival",
+        4: "Mesial",
+        5: "Distal",
+        7: "InnerPoint",
+        8: "OuterPoint",
+        9: "FacialPoint",
+    }
+    MULTI_POINT_CHANNELS = { # fixed K=4 points
+        3: ("Planar", 4),
+    }
+    VARIABLE_POINT_CHANNELS = { # variable cusps
+        6: "Cusp",
+    }
+
+    def _extract_single_point_proposal(self, verts, channel_pred, percentile=95):
+        thresh = np.percentile(channel_pred, percentile)
+        inds = np.nonzero(channel_pred >= thresh)[0]
+
+        if inds.size == 0:
+            max_idx = int(np.argmax(channel_pred))
+            return verts[max_idx].astype(np.float64)
+
+        local_verts = verts[inds].astype(np.float64)
+        weights = channel_pred[inds].astype(np.float64)
+
+        wsum = weights.sum()
+        if wsum <= 0:
+            max_idx = int(np.argmax(channel_pred))
+            return verts[max_idx].astype(np.float64)
+
+        centroid = (local_verts.T @ weights) / wsum
+        dists = np.sum((local_verts - centroid) ** 2, axis=1)
+        nearest_idx = np.argmin(dists)
+
+        return local_verts[nearest_idx]
+
+    def _extract_multi_point_proposal(self, verts, channel_pred, k, percentile=95):
+        thresh = np.percentile(channel_pred, percentile)
+        inds = np.nonzero(channel_pred >= thresh)[0]
+
+        if inds.size < k:
+            inds = np.argpartition(channel_pred, -k)[-k:]
+
+        local_verts = verts[inds].astype(np.float64)
+        weights = channel_pred[inds].astype(np.float64)
+
+        kmeans = KMeans(n_clusters=k, n_init=10, random_state=0).fit(
+            local_verts, sample_weight=weights
+        )
+        proposals = []
+        for center in kmeans.cluster_centers_:
+            dists = np.sum((local_verts - center) ** 2, axis=1)
+            proposals.append(local_verts[np.argmin(dists)].tolist())
+        return proposals
+
+    def _get_num_clusters_from_components(self, mesh, inds, min_k, max_k):
+        from scipy.sparse import csr_matrix
+        from scipy.sparse.csgraph import connected_components
+
+        ind_set = set(inds.tolist())
+        local_idx = {g: l for l, g in enumerate(inds.tolist())}
+        n = len(inds)
+
+        rows, cols = [], []
+        for v0, v1 in mesh.edges_unique:
+            v0, v1 = int(v0), int(v1)
+            if v0 in ind_set and v1 in ind_set:
+                rows += [local_idx[v0], local_idx[v1]]
+                cols += [local_idx[v1], local_idx[v0]]
+
+        graph = csr_matrix((np.ones(len(rows)), (rows, cols)), shape=(n, n))
+        n_components, _ = connected_components(graph, directed=False)
+        return int(np.clip(n_components, min_k, max_k))
+
+    def _extract_variable_point_proposal(self, mesh, channel_pred, min_k=2, max_k=6, percentile=95):
+        verts = np.asarray(mesh.vertices)
+        thresh = np.percentile(channel_pred, percentile)
+        inds = np.nonzero(channel_pred >= thresh)[0]
+
+        k = self._get_num_clusters_from_components(mesh, inds, min_k, max_k)
+
+        if inds.size < k:
+            inds = np.argpartition(channel_pred, -k)[-k:]
+
+        local_verts = verts[inds].astype(np.float64)
+        weights = channel_pred[inds].astype(np.float64)
+
+        kmeans = KMeans(n_clusters=k, n_init=10, random_state=0).fit(
+            local_verts, sample_weight=weights
+        )
+        proposals = []
+        for center in kmeans.cluster_centers_:
+            dists = np.sum((local_verts - center) ** 2, axis=1)
+            proposals.append(local_verts[np.argmin(dists)].tolist())
+        return proposals
+
+    def _swap_mesial_distal(self, channels_proposals):
+        channels_proposals['Mesial'], channels_proposals['Distal'] = channels_proposals['Distal'], channels_proposals['Mesial']
+
+    def _mesial_distal_correction(self, channels_proposals:dict, full_path:str):
+        patient_left = list(range(23, 29)) + list(range(33, 39))
+        patient_right = list(range(13, 19)) + list(range(43, 49))
+        front_left =  [21, 22, 31, 32]
+        front_right = [11, 12, 41, 42]
+        file_name = Path(full_path).stem
+        ide, arch, _, FDI = file_name.split("_")
+        FDI = int(FDI)
+        mesial = channels_proposals["Mesial"]
+        distal = channels_proposals["Distal"]
+        if FDI in patient_right or FDI in patient_left:
+            y_mesial, y_distal = mesial[1], distal[1]
+            if y_distal > y_mesial: self._swap_mesial_distal(channels_proposals)
+        elif FDI in front_left:
+            x_mesial, x_distal = mesial[0], distal[0]
+            if x_distal > x_mesial: self._swap_mesial_distal(channels_proposals)
+        elif FDI in front_right:
+            x_mesial, x_distal = mesial[0], distal[0]
+            if x_mesial > x_distal: self._swap_mesial_distal(channels_proposals)
+
+    def test(self):
+        assert self.test_loader.batch_size == 1
+        logger = get_root_logger()
+        logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+
+        batch_time = AverageMeter()
+        mse_meter = AverageMeter()
+        mae_meter = AverageMeter()
+        self.model.eval()
+
+        save_path = os.path.join(self.cfg.save_path, "results")
+        heatmap_path = os.path.join(save_path, "heatmaps")
+        make_dirs(save_path)
+        make_dirs(heatmap_path)
+
+        all_results = {}
+
+        for idx, data_dict in enumerate(self.test_loader):
+            start = time.time()
+            data_dict = data_dict[0]
+
+            fragment_list = data_dict.pop("fragment_list")
+            segment = data_dict.pop("segment")
+            validity_mask = data_dict.pop("validity_mask")
+            _ = data_dict.pop("landmarks", None)
+            data_name = data_dict.pop("name")
+            full_path = data_dict.get("full_path")
+
+            pred = torch.zeros(segment.shape[0], 10).cuda()
+
+            for i in range(len(fragment_list)):
+                fragment_batch_size = 1
+                s_i, e_i = i * fragment_batch_size, min(
+                    (i + 1) * fragment_batch_size, len(fragment_list)
+                )
+                input_dict = collate_fn(fragment_list[s_i:e_i])
+
+                for key in input_dict.keys():
+                    if isinstance(input_dict[key], torch.Tensor):
+                        input_dict[key] = input_dict[key].cuda(non_blocking=True)
+
+                idx_part = input_dict["index"]
+
+                with torch.no_grad():
+                    output_dict = self.model(input_dict)
+                    pred_part = output_dict["seg_logits"]
+
+                    if pred_part.dim() > 2:
+                        pred_part = pred_part.squeeze(-1)
+
+                    if self.cfg.empty_cache:
+                        torch.cuda.empty_cache()
+
+                    bs = 0
+                    for be in input_dict["offset"]:
+                        pred[idx_part[bs:be]] += pred_part[bs:be]
+                        bs = be
+
+                logger.info(
+                    f"Test: {idx + 1}/{len(self.test_loader)}-{data_name}, "
+                    f"Batch: {i}/{len(fragment_list)}"
+                )
+
+            pred = pred / len(fragment_list)
+            pred = pred.cpu().numpy()
+            pred = np.clip(pred, 0.0, 1.0)
+
+            if "origin_segment" in data_dict:
+                assert "inverse" in data_dict
+                pred = pred[data_dict["inverse"]]
+                segment = data_dict["origin_segment"]
+                if "origin_validity_mask" in data_dict:
+                    validity_mask = data_dict["origin_validity_mask"]
+                else:
+                    validity_mask = validity_mask[data_dict["inverse"]]
+
+            valid_mask = validity_mask.astype(np.float32)
+            if valid_mask.ndim == 1:
+                valid_mask_metrics = np.broadcast_to(valid_mask[None, :], segment.shape)
+            else:
+                valid_mask_metrics = valid_mask
+
+            valid_count = np.sum(valid_mask_metrics)
+
+            if valid_count > 0:
+                diff = pred - segment
+                mse = np.sum((diff ** 2) * valid_mask_metrics) / valid_count
+                mae = np.sum(np.abs(diff) * valid_mask_metrics) / valid_count
+                mse_meter.update(mse)
+                mae_meter.update(mae)
+            else:
+                mse = float("nan")
+                mae = float("nan")
+                logger.warning(f"No valid channels for sample {data_name}, skipping metrics.")
+
+            batch_time.update(time.time() - start)
+            logger.info(
+                f"Test: {data_name} [{idx + 1}/{len(self.test_loader)}]-{segment.size} "
+                f"Batch {batch_time.val:.3f} ({batch_time.avg:.3f}) "
+                f"MSE {mse:.6f} ({mse_meter.avg:.6f}) "
+                f"MAE {mae:.6f} ({mae_meter.avg:.6f})"
+            )
+
+            mesh = trimesh.load(full_path, force="mesh")
+            verts = np.asarray(mesh.vertices)
+
+            channels_proposals = {}
+            for channel_idx, landmark_name in self.SINGLE_POINT_CHANNELS.items():
+                channel_pred = pred[:, channel_idx]
+                proposal = self._extract_single_point_proposal(verts, channel_pred)
+                channels_proposals[landmark_name] = proposal.tolist()
+
+            self._mesial_distal_correction(channels_proposals, full_path)
+
+            for channel_idx, (landmark_name, k) in self.MULTI_POINT_CHANNELS.items():
+                channel_pred = pred[:, channel_idx]
+                channels_proposals[landmark_name] = self._extract_multi_point_proposal(verts, channel_pred, k)
+
+            for channel_idx, landmark_name in self.VARIABLE_POINT_CHANNELS.items():
+                channel_pred = pred[:, channel_idx]
+                channels_proposals[landmark_name] = self._extract_variable_point_proposal(mesh, channel_pred)
+
+            all_results[data_name] = channels_proposals
+
+        logger.info(
+            f"Val result: MSE/MAE {mse_meter.avg:.6f}/{mae_meter.avg:.6f}"
+        )
+
+        results_json_path = os.path.join(save_path, "predictions.json")
+        with open(results_json_path, "w") as f:
+            json.dump(all_results, f, indent=4)
+        logger.info(f"Saved results to {results_json_path}")
+
+        logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
+
     @staticmethod
     def collate_fn(batch):
         return batch

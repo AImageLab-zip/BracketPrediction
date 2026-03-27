@@ -16,6 +16,7 @@ import torch
 import torch.utils.data
 from collections import OrderedDict
 import torch.nn.functional as F
+import numpy as np
 
 if sys.version_info >= (3, 10):
     from collections.abc import Sequence
@@ -748,4 +749,147 @@ class HeatmapEvaluator(HookBase):
     def after_train(self):  
         self.trainer.logger.info(  
             "Best MSE: {:.6f}".format(-self.trainer.best_metric_value)  # Negate back  
+        )
+
+@HOOKS.register_module()
+class HeatmapEvaluatorV2(HookBase):
+    def __init__(self):
+        pass
+
+    def before_train(self):
+        if self.trainer.writer is not None and self.trainer.cfg.enable_wandb:
+            wandb.define_metric("val/*", step_metric="Epoch")
+
+    def after_epoch(self):
+        if self.trainer.cfg.evaluate:
+            self.eval()
+
+    @staticmethod
+    def _masked_mean(x, mask, eps=1e-8):
+        return (x * mask).sum() / mask.sum().clamp_min(eps)
+
+    def eval(self):
+        self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+        self.trainer.model.eval()
+
+        all_predictions = []
+        loss_list = []
+        mse_list = []
+        mae_list = []
+
+        for i, input_dict in enumerate(self.trainer.val_loader):
+            for key in input_dict.keys():
+                if isinstance(input_dict[key], torch.Tensor):
+                    input_dict[key] = input_dict[key].cuda(non_blocking=True)
+
+            with torch.no_grad():
+                output_dict = self.trainer.model(input_dict)
+
+            # Prediction
+            heatmap_pred = output_dict["seg_logits"]
+            heatmap_pred = torch.clamp(heatmap_pred, 0.0, 1.0)
+            all_predictions.append(heatmap_pred.detach().cpu())
+
+            # Ground truth + validity mask
+            segment = input_dict["segment"].to(heatmap_pred.device).float()
+            validity_mask = input_dict["validity_mask"].to(heatmap_pred.device).float()
+
+            # Handle inverse mapping if present
+            if "inverse" in input_dict:
+                assert "origin_segment" in input_dict
+                heatmap_pred = heatmap_pred[input_dict["inverse"]]
+                segment = input_dict["origin_segment"].to(heatmap_pred.device).float()
+
+                if "origin_validity_mask" in input_dict:
+                    validity_mask = input_dict["origin_validity_mask"].to(heatmap_pred.device).float()
+                else:
+                    validity_mask = validity_mask[input_dict["inverse"]]
+
+            if heatmap_pred.shape != segment.shape:
+                raise ValueError(
+                    f"Prediction/GT shape mismatch: pred={heatmap_pred.shape}, gt={segment.shape}"
+                )
+            if validity_mask.shape != segment.shape:
+                raise ValueError(
+                    f"Mask/GT shape mismatch: mask={validity_mask.shape}, gt={segment.shape}"
+                )
+
+            # Masked metrics
+            diff = heatmap_pred - segment
+            mse = self._masked_mean(diff.pow(2), validity_mask)
+            mae = self._masked_mean(diff.abs(), validity_mask)
+
+            # Loss from forward (already masked if your model is updated)
+            loss = output_dict["loss"]
+
+            mse_item = mse.item()
+            mae_item = mae.item()
+            loss_item = loss.item()
+
+            loss_list.append(loss_item)
+            mse_list.append(mse_item)
+            mae_list.append(mae_item)
+
+            # Store metrics
+            self.trainer.storage.put_scalar("val_loss", loss_item)
+            self.trainer.storage.put_scalar("val_mse", mse_item)
+            self.trainer.storage.put_scalar("val_mae", mae_item)
+
+            info = "Val: [{iter}/{max_iter}] ".format(
+                iter=i + 1, max_iter=len(self.trainer.val_loader)
+            )
+            if "origin_coord" in input_dict:
+                info = "Interp. " + info
+
+            self.trainer.logger.info(
+                info + "Loss {loss:.6f} MSE {mse:.6f} MAE {mae:.6f}".format(
+                    loss=loss_item, mse=mse_item, mae=mae_item
+                )
+            )
+
+        # Per-epoch averages
+        loss_avg = float(np.mean(loss_list)) if len(loss_list) > 0 else 0.0
+        mse_avg = float(np.mean(mse_list)) if len(mse_list) > 0 else 0.0
+        mae_avg = float(np.mean(mae_list)) if len(mae_list) > 0 else 0.0
+
+        all_predictions = torch.cat(all_predictions, dim=0)
+
+        self.trainer.logger.info(
+            "Val result: Loss/MSE/MAE {:.6f}/{:.6f}/{:.6f}".format(
+                loss_avg, mse_avg, mae_avg
+            )
+        )
+
+        current_epoch = self.trainer.epoch + 1
+        if self.trainer.writer is not None:
+            self.trainer.writer.add_scalar("val/loss", loss_avg, current_epoch)
+            self.trainer.writer.add_scalar("val/MSE", mse_avg, current_epoch)
+            self.trainer.writer.add_scalar("val/MAE", mae_avg, current_epoch)
+            self.trainer.writer.add_histogram(
+                "val/predictions_distribution",
+                all_predictions,
+                current_epoch,
+            )
+
+            if self.trainer.cfg.enable_wandb:
+                wandb.log(
+                    {
+                        "Epoch": current_epoch,
+                        "val/loss": loss_avg,
+                        "val/MSE": mse_avg,
+                        "val/MAE": mae_avg,
+                        "val/predictions_histogram": wandb.Histogram(all_predictions.numpy()),
+                    },
+                    step=wandb.run.step,
+                )
+
+        self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
+
+        # Lower MSE is better, but CheckpointSaver maximizes
+        self.trainer.comm_info["current_metric_value"] = -mse_avg
+        self.trainer.comm_info["current_metric_name"] = "MSE"
+
+    def after_train(self):
+        self.trainer.logger.info(
+            "Best MSE: {:.6f}".format(-self.trainer.best_metric_value)
         )

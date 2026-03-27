@@ -15,8 +15,8 @@ import json
 import os
 from collections import defaultdict
 
-@MODELS.register_module()  
-class LandmarkPredictor(nn.Module):  
+@MODELS.register_module("LandmarksRegression")  
+class LandmarksRegression(nn.Module):  
     """
     """  
       
