@@ -41,6 +41,7 @@ def plot_teeth(points_dict: dict,
         'Mesial': {'color': 'purple', 'marker': 'v', 'label': 'Mesial'},
         'Distal': {'color': 'brown', 'marker': '^', 'label': 'Distal'},
         'Inner': {'color': 'pink', 'marker': 'P', 'label': 'Inner'},
+        'Outer': {'color': 'magenta', 'marker': '>', 'label': 'Outer'},
         'Planar': {'color': 'red', 'marker': '*', 'label': 'Planar'},
         'Cusp': {'color': 'blue', 'marker': 'X', 'label': 'Cusp'},
     }

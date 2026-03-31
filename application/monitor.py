@@ -393,8 +393,32 @@ class ScanMonitor:
             self.save_status()
             return
         
-        # Mark files as successfully processed
+        # First: save rotated projected points (no visuals)
+        try:
+            from bond import postprocess_predictions
+            postprocess_predictions(patient_dir, visualize=False)
+            print("✅ Rotated points saved")
+        except Exception as e:
+            print(f"⚠️ Failed to save rotated points: {e}")
+
+        # THEN notify the server that processing finished
         self.update_status(patient_dir.name, 2, "Processing completed!")
+
+        # NOW generate visualizations (single-tooth + jaw)
+        try:
+            # generate single-tooth visualizations (this will also re-run postprocessing with visuals)
+            postprocess_predictions(patient_dir, visualize=True)
+        except Exception as e:
+            print(f"⚠️ Post-processing/teeth visualization failed: {e}")
+
+        try:
+            from visualizers import plot_jaw
+            plot_jaw(patient_dir, raw_scan=False)
+            plot_jaw(patient_dir, raw_scan=True)
+            print(f"✅ Visualizations complete")
+        except Exception as e:
+            print(f"⚠️ Jaw visualization failed: {e}")
+        
         processing_entry["status"] = "completed"
         processing_entry["completed_at"] = datetime.now().isoformat()
         self.status[patient_id]["processing_history"].append(processing_entry)

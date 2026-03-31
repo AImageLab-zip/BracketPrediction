@@ -133,11 +133,9 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path, 
         if fdi_index == 0:
             continue  # Skip gum
         
-        # Create folder for this FDI index
-        # Get points belonging to this tooth and nearby gum
-        tooth_mask = mask == fdi_index
-        gum_mask = (mask == 0) & dilation_masks[fdi_index]
-        combined_mask = tooth_mask | gum_mask
+        # Get points belonging to this tooth and nearby neighbors (gum or other teeth)
+        # Use dilation mask directly to include all spatially close vertices
+        combined_mask = dilation_masks[fdi_index]
         class_indices = np.where(combined_mask)[0]
         if len(class_indices) == 0:
             continue
@@ -225,7 +223,7 @@ def run_segmentation_with_model(cfg, model, data_folder: Path, visualize: bool =
         for stl_file in stl_files:
             # Find corresponding prediction mask
             mask_file = output_folder / "result" / f"{stl_file.stem}_pred.npy"
-            
+ 
             if not mask_file.exists():
                 print(f"Warning: No prediction found for {stl_file.name}, skipping...")
                 continue

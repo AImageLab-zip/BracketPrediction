@@ -76,7 +76,7 @@ def process_tooth_predictions(mesh,
     output_dir.mkdir(parents=True, exist_ok=True)
     
     vertices = mesh.vertices
-    
+ 
     # Load transformation parameters from tooth's JSON file
     transform_file = teeth_path / f"{tooth_key}.json"
     translation = np.array([0.0, 0.0, 0.0])
@@ -134,7 +134,7 @@ def process_tooth_predictions(mesh,
     if fdi in [16, 17, 26, 27, 36, 37, 46, 47]:
         bracket_mm = bracket / scaling  # Convert to mm space
         vertices_mm = vertices / scaling  # Convert all vertices to mm space
-        
+ 
         # Find vertices within 1.5mm radius
         distances = np.linalg.norm(vertices_mm - bracket_mm, axis=1)
         nearby_indices = np.where(distances <= 1.5)[0]
@@ -233,16 +233,17 @@ def process_tooth_predictions(mesh,
     }
     
     # Add cusps for molars and premolars
-    molars_premolars = [14,15,16,17,24,25,26,27,34,35,36,37,44,45,46,47]
+    molars_premolars = [14,15,16,17,18,24,25,26,27,28,34,35,36,37,38,44,45,46,47,48]
     if fdi in molars_premolars and 'Cusp' in denormalized:
         json_data["cusps"] = denormalized['Cusp']
     
     # Add planar for molars
-    molars = [16,17,26,27,36,37,46,47]
+    molars = [16,17,18,26,27,28,36,37,38,46,47,48]
     if fdi in molars and 'Planar' in denormalized:
         json_data["planar"] = denormalized['Planar']
     # Filter points for visualization based on tooth type
-    plot_points = {k: v for k, v in projected.items() if k not in ['Facial', 'Outer']}
+    # Include 'Outer' in single-tooth plots (only exclude 'Facial')
+    plot_points = {k: v for k, v in projected.items() if k != 'Facial'}
     # Only show planar for molars
     molars = [16,17,18,26,27,28,36,37,38,46,47,48]
     if fdi not in molars and 'Planar' in plot_points:
@@ -334,11 +335,38 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
     rotated_points = {}
 
     for tooth_key, pdata in all_points_data.items():
+        # Parse patient id and FDI from tooth_key (expected like "STEM_lower_0002_FDI_47")
+        parts = tooth_key.split('_')
+        if 'lower' in parts:
+            jaw_idx = parts.index('lower')
+            jaw_type = 'lower'
+        elif 'upper' in parts:
+            jaw_idx = parts.index('upper')
+            jaw_type = 'upper'
+        else:
+            jaw_idx = 1
+            jaw_type = 'lower' if 'lower' in tooth_key else 'upper'
+
+        try:
+            patient_id_local = parts[jaw_idx + 1]
+        except Exception:
+            patient_id_local = parts[jaw_idx] if jaw_idx < len(parts) else ''
+
+        try:
+            fdi_idx = parts.index('FDI')
+            fdi_local = int(parts[fdi_idx + 1])
+        except Exception:
+            # fallback: try to find a numeric token
+            fdi_local = None
+            for tok in reversed(parts):
+                if tok.isdigit():
+                    fdi_local = int(tok)
+                    break
+
         # Load shift file before rotation
         shift = np.array([0.0, 0.0, 0.0])
-        jaw_type = 'lower' if 'lower' in tooth_key else 'upper'
-        shift_file_name = f"STEM_{jaw_type}_{patient_id}_shift.json"
-        shift_file = data_folder / shift_file_name  # Simplified: shift file is in data_folder
+        shift_file_name = f"STEM_{jaw_type}_{patient_id_local}_shift.json"
+        shift_file = data_folder / shift_file_name
 
         if shift_file.exists():
             try:
@@ -347,15 +375,59 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
                     shift = np.array(shift_data.get('shift', [0.0, 0.0, 0.0]))
             except Exception as e:
                 print(f"  ⚠️ Could not load or parse shift file {shift_file}: {e}")
-        else: 
-            print(f"  ⚠️ Shift file does not exist for patient {patient_id}")
-        
+        else:
+            print(f"  ⚠️ Shift file does not exist for patient {patient_id_local}")
+
         # Choose rotation sequence based on jaw
         if jaw_type == 'lower':
             seq = [('x', -90), ('y', 180)]
         else:
-            seq = [('y',180), ('x', -90), ('y', 180)]
+            seq = [('y', 180), ('x', -90), ('y', 180)]
+
+        # Compute combined homogeneous transform matrix (4x4):
+        # M = R_seq @ T_shift @ R_upper1 @ T_centroid @ S
+        # where S = scale inverse, T_centroid = centroid from tooth json,
+        # R_upper1 = initial 180deg Y for upper teeth (fdi <= 28),
+        # T_shift = shift file translation, R_seq = final rotation sequence.
         try:
+            # load tooth transform (scaling, translation/centroid)
+            transform_file = teeth_path / f"{tooth_key}.json"
+            scale = 1.0
+            centroid = np.array([0.0, 0.0, 0.0])
+            with open(transform_file, 'r') as tf:
+                tdata = json.load(tf)
+                scale = float(tdata.get('scaling', 1.0))
+                centroid = np.array(tdata.get('translation', [0.0, 0.0, 0.0]))
+
+
+            # homogeneous scale (divide by scale)
+            S = np.eye(4)
+            if scale != 0:
+                S[0, 0] = S[1, 1] = S[2, 2] = 1.0 / float(scale)
+            # translation by centroid (from tooth json)
+            T_centroid = trimesh.transformations.translation_matrix(centroid.tolist())
+            # initial upper rotation applied during denormalization (fdi <= 28)
+            if fdi_local is not None and fdi_local <= 28:
+                R_upper1 = trimesh.transformations.rotation_matrix(np.pi, [0, 1, 0])
+            else:
+                R_upper1 = np.eye(4)
+            # shift translation (from shift file)
+            T_shift = trimesh.transformations.translation_matrix(shift.tolist())
+            # final rotation sequence
+            R_seq = np.eye(4)
+            for axis, degrees in seq:
+                radians = np.deg2rad(degrees)
+                if axis == 'x':
+                    R_axis = trimesh.transformations.rotation_matrix(radians, [1, 0, 0])
+                elif axis == 'y':
+                    R_axis = trimesh.transformations.rotation_matrix(radians, [0, 1, 0])
+                else:
+                    R_axis = trimesh.transformations.rotation_matrix(radians, [0, 0, 1])
+                R_seq = R_axis @ R_seq
+
+            # Combined matrix
+            M = R_seq @ T_shift @ R_upper1 @ T_centroid @ S
+
             # Apply shift to points, then apply rotations using trimesh
             incisal = np.array(pdata['incisal']) + shift
             outer = np.array(pdata['outer']) + shift
@@ -363,7 +435,7 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
             xaxis = np.array(pdata['basePlane']['xAxis']) + shift
             yaxis = np.array(pdata['basePlane']['yAxis']) + shift
             zaxis = np.array(pdata['basePlane']['zAxis']) + shift
-            
+
             # Apply rotation sequence using trimesh transformations
             for axis, degrees in seq:
                 radians = np.deg2rad(degrees)
@@ -373,7 +445,7 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
                     rotation = trimesh.transformations.rotation_matrix(radians, [0, 1, 0])
                 else:
                     rotation = trimesh.transformations.rotation_matrix(radians, [0, 0, 1])
-                
+
                 # Apply transformation to points
                 incisal = trimesh.transformations.transform_points([incisal], rotation)[0]
                 outer = trimesh.transformations.transform_points([outer], rotation)[0]
@@ -382,7 +454,7 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
                 yaxis = trimesh.transformations.transform_points([yaxis], rotation)[0]
                 zaxis = trimesh.transformations.transform_points([zaxis], rotation)[0]
 
-            # Copy all new points with rotation
+            # Copy all new points with rotation (include 'outer' and other landmarks)
             rotated_entry = {
                 'incisal': incisal.tolist(),
                 'outer': outer.tolist(),
@@ -391,9 +463,11 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
                     'xAxis': xaxis.tolist(),
                     'yAxis': yaxis.tolist(),
                     'zAxis': zaxis.tolist(),
-                }
+                },
+                # store combined homogeneous transform (from normalized prediction -> rotated space)
+                'rotation_matrix': M.tolist(),
             }
-            
+
             # Add optional points if they exist
             for key in ['gingival', 'mesial', 'distal', 'inner', 'facial', 'bracket']:
                 if key in pdata and pdata[key] is not None:
@@ -409,14 +483,14 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
                                 rotation = trimesh.transformations.rotation_matrix(radians, [0, 0, 1])
                             pt = trimesh.transformations.transform_points([pt], rotation)[0]
                         rotated_entry[key] = pt.tolist()
-                    except:
+                    except Exception:
                         pass
-            
+
             # Add cusps for molars/premolars and planar for molars
-            molars_premolars = [14,15,16,17,18,24,25,26,27,28,34,35,36,37,38,44,45,46,47,48]
-            molars = [16,17,18,26,27,28,36,37,38,46,47,48]
-            
-            if fdi in molars_premolars and 'cusps' in pdata:
+            molars_premolars = [14, 15, 16, 17, 18, 24, 25, 26, 27, 28, 34, 35, 36, 37, 38, 44, 45, 46, 47, 48]
+            molars = [16, 17, 18, 26, 27, 28, 36, 37, 38, 46, 47, 48]
+
+            if fdi_local is not None and fdi_local in molars_premolars and 'cusps' in pdata:
                 try:
                     cusps_rot = []
                     for cusp_pt in pdata['cusps']:
@@ -432,10 +506,10 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
                             pt = trimesh.transformations.transform_points([pt], rotation)[0]
                         cusps_rot.append(pt.tolist())
                     rotated_entry['cusps'] = cusps_rot
-                except:
+                except Exception:
                     pass
-            
-            if fdi in molars and 'planar' in pdata:
+
+            if fdi_local is not None and fdi_local in molars and 'planar' in pdata:
                 try:
                     planar_rot = []
                     for planar_pt in pdata['planar']:
@@ -451,9 +525,9 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
                             pt = trimesh.transformations.transform_points([pt], rotation)[0]
                         planar_rot.append(pt.tolist())
                     rotated_entry['planar'] = planar_rot
-                except:
+                except Exception:
                     pass
-            
+
             rotated_points[tooth_key] = rotated_entry
         except Exception as e:
             print(f"⚠️ Error rotating points for {tooth_key}: {e}")
@@ -461,14 +535,7 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
     rotated_output_path = output_reg_path / "projected_points_rotated.json"
     with open(rotated_output_path, 'w') as f: json.dump(rotated_points, f, indent=4)
     print(f"\n💾 Saved rotated projected points to: {rotated_output_path}")
-    print(f"\n✅ Post-processing complete. Visualizations saved to: {viz_dir}")
-    if visualize: 
-        # ============= Debug visualizations ==================
-        try:
-            plot_jaw(data_folder, raw_scan=False)
-            plot_jaw(data_folder, raw_scan=True)
-        except Exception as e:
-            print(f"  ⚠️  Jaw visualization failed: {e}")
+    print(f"\n✅ Post-processing complete.")
 
 
 def run_bond_with_model(cfg, model, data_folder: Path, visualize: bool = True) -> bool:
@@ -509,13 +576,12 @@ def run_bond_with_model(cfg, model, data_folder: Path, visualize: bool = True) -
         tester = TESTERS.build(test_cfg)
         tester.test()
         
-        # Add post-processing and visualization after testing
+        # Add post-processing after testing is intentionally skipped here.
+        # The monitor will call `postprocess_predictions` after reporting
+        # completion to the server so that plotting happens afterward.
         print("\n" + "="*60)
-        print("Testing complete. Starting post-processing...")
+        print("Testing complete. Post-processing deferred to monitor.")
         print("="*60)
-        
-        postprocess_predictions(data_folder, visualize=visualize)
-        
         return True
         
     except Exception as e:
@@ -539,7 +605,7 @@ def main_worker(cfg):
     
     # Extract data_folder from save_path
     data_folder = Path(cfg.save_path).parent
-    postprocess_predictions(data_folder, visualize= not cfg.no_visuals)
+    postprocess_predictions(data_folder, visualize=False)
 
 
 def main():
