@@ -18,6 +18,7 @@ submit_all_train_jobs.sh
 submit_all_test_jobs.sh
 .vscode
 .idea
+.env
 */.DS_Store
 **/*.out
 Mlugli

@@ -6,7 +6,8 @@ source /opt/conda/etc/profile.d/conda.sh
 conda activate base
 
 # Run the monitor
-xvfb-run -s "-screen 0 1920x1080x24" \
+rm -f /tmp/.X*-lock /tmp/.X11-unix/X*
+xvfb-run --auto-servernum -s "-screen 0 1920x1080x24" \
 python /workspace/application/monitor.py \
     --data-root /workspace/application/data/ \
     --seg-config /workspace/application/configs/Pt_semseg_app.py \

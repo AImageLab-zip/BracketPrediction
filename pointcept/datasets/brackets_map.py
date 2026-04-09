@@ -111,9 +111,9 @@ class BracketMapDataset(DefaultDataset):
         """Load heatmap values from .npy file"""  
         heatmap = np.load(npy_path)  
         heatmap = heatmap.astype(np.float32) # (N,3)
-        return heatmap  
+        return heatmap
 
-    
+ 
     def _load_json(self, json_path):
         # If in production, just load empty vectors
         if self.production:
@@ -125,7 +125,7 @@ class BracketMapDataset(DefaultDataset):
         incisal = np.array(data['incisal'], dtype=np.float32)
         outer = np.array(data['outer'], dtype=np.float32)
         return bracket, incisal, outer
-    
+ 
     def get_data(self, idx, testing=False):  
         file_rel_path = self.data_list[idx % len(self.data_list)]  
         stl_path = os.path.join(self.data_root, file_rel_path)  
@@ -151,7 +151,7 @@ class BracketMapDataset(DefaultDataset):
             "segment": segment # heatmap to predict
         }
         return d
-    
+ 
     def prepare_test_data(self, idx):
         data_dict = self.get_data(idx, testing=True)  
         data_dict = self.transform(data_dict)
@@ -171,12 +171,12 @@ class BracketMapDataset(DefaultDataset):
             result_dict["origin_segment"] = data_dict.pop("origin_segment")
             if "inverse" in result_dict:
                 result_dict["inverse"] = data_dict.pop("inverse")
-    
+
         # Create fragments with augmentations
         data_dict_list = []
         for aug in self.aug_transform:
             data_dict_list.append(aug(deepcopy(data_dict)))
-    
+ 
         fragment_list = []
         for data in data_dict_list:
             if self.test_voxelize is not None:
@@ -190,12 +190,12 @@ class BracketMapDataset(DefaultDataset):
                 else:  
                     data_part = [data_part]
                 fragment_list += data_part
-    
+ 
         for i in range(len(fragment_list)):
             fragment_list[i] = self.post_transform(fragment_list[i])
         result_dict["fragment_list"] = fragment_list
         return result_dict
-    
+ 
     def __len__(self):
         if self.debug: return 2 # if debugging, run on just 2 samples
         return len(self.data_list) * self.loop

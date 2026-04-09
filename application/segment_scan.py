@@ -33,8 +33,11 @@ from pathlib import Path
 from pointcept.engines.launch import launch
 import numpy as np
 import json
+import trimesh
 import torch
 from scipy.spatial import cKDTree
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
 
 
 def normalize(points: np.ndarray, flip:bool=False) -> tuple[np.ndarray, np.ndarray, float]:
@@ -88,6 +91,52 @@ def compute_dilation_masks(mask: np.ndarray, vertices: np.ndarray) -> dict[int, 
 
     return result
 
+def clean_segmentation_mask(mask, points, faces, min_fraction=0.4):
+    """Remove small noise labels by reassigning them to nearest neighbor labels."""
+    # Compute mean tooth size (in points) across all labeled teeth
+    tooth_labels = np.unique(mask[mask != 0])
+    if len(tooth_labels) == 0:
+        return mask
+    
+    mean_tooth_size = np.mean([np.sum(mask == l) for l in tooth_labels])
+    min_component_size = int(min_fraction * mean_tooth_size)
+    
+    # Identify labels to delete (too few points)
+    labels_to_delete = set()
+    for label in tooth_labels:
+        if np.sum(mask == label) < min_component_size:
+            labels_to_delete.add(label)
+    
+    if not labels_to_delete:
+        return mask
+    
+    # Build KD-tree for all points with valid labels (not to be deleted)
+    valid_labels = np.isin(mask, list(labels_to_delete), invert=True)
+    valid_point_indices = np.where(valid_labels)[0]
+    
+    if len(valid_point_indices) == 0:
+        # All labels are to be deleted, return as is
+        return mask
+    
+    valid_points = points[valid_point_indices]
+    tree = cKDTree(valid_points)
+    
+    new_mask = mask.copy()
+    
+    # Reassign noisy points to nearest neighbor with different label
+    for label in labels_to_delete:
+        noisy_point_indices = np.where(mask == label)[0]
+        noisy_points = points[noisy_point_indices]
+        
+        # Find nearest neighbor in valid labels
+        dists, neighbor_indices = tree.query(noisy_points, workers=-1)
+        nearest_valid_indices = valid_point_indices[neighbor_indices]
+        
+        # Reassign to the label of nearest valid point
+        new_labels = mask[nearest_valid_indices]
+        new_mask[noisy_point_indices] = new_labels
+    
+    return new_mask
 
 def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path, visualize: bool = True):
     """
@@ -102,15 +151,11 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path, 
     from visualizers import create_segmentation_visualization
     
     print(f"Postprocessing {stl_file.name}...")
-    
+ 
     # Load mesh and mask
     mesh = pv.read(stl_file)
     mask = np.load(mask_file)
-    if visualize:
-        try:
-            create_segmentation_visualization(mesh, mask, stl_file.stem, output_dir)
-        except Exception as e:
-            print(f"  ⚠️  Visualization failed (continuing anyway): {e}") 
+    
     if len(mask) != len(mesh.points):
         print(f"Warning: Mask length ({len(mask)}) doesn't match points ({len(mesh.points)})")
         return
@@ -119,37 +164,46 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path, 
     teeth_output_dir = output_dir / "teeth"
     teeth_output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Get unique FDI indices (excluding 0 which is gum)
-    unique_fdi_indices = np.unique(mask)
     points = mesh.points
     faces = mesh.faces.reshape(-1, 4)[:, 1:]  # Remove the '3' prefix from each face
+    cleaned_mask = clean_segmentation_mask(mask, points, faces)
+    
+    if visualize:
+        try:
+            create_segmentation_visualization(mesh, cleaned_mask, stl_file.stem, output_dir)
+        except Exception as e:
+            print(f"  ⚠️  Visualization failed (continuing anyway): {e}")
+    
+    # Get unique FDI indices from cleaned mask (excluding 0 which is gum)
+    unique_fdi_indices = np.unique(cleaned_mask)
     print(f"Found {len(unique_fdi_indices)} unique classes: {unique_fdi_indices}")
-
+    
     # Compute dilation masks for including gum around teeth
-    dilation_masks = compute_dilation_masks(mask, points)
+    dilation_masks = compute_dilation_masks(cleaned_mask, points)
 
     # Process teeth 
     for fdi_index in unique_fdi_indices:
         if fdi_index == 0:
             continue  # Skip gum
-        
+ 
         # Get points belonging to this tooth and nearby neighbors (gum or other teeth)
         # Use dilation mask directly to include all spatially close vertices
         combined_mask = dilation_masks[fdi_index]
+        # Only keep largest connected component to avoid segmentation artifacts
         class_indices = np.where(combined_mask)[0]
         if len(class_indices) == 0:
             continue
-        
+ 
         class_points = points[combined_mask]
         normalized_class_points, translation, scale = normalize(class_points, "upper" in base_name)
-        
+ 
         face_mask = np.all(np.isin(faces, class_indices), axis=1)
         class_faces_old_idx = faces[face_mask]
-        
+ 
         # Remap face indices to new point array
         old_to_new = {old_idx: new_idx for new_idx, old_idx in enumerate(class_indices)}
         class_faces = np.array([[old_to_new[idx] for idx in face] for face in class_faces_old_idx])
-        
+ 
         # Create PyVista mesh for this tooth
         # Faces need to be in format: [3, v0, v1, v2, 3, v3, v4, v5, ...]
         try:
@@ -171,14 +225,13 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path, 
             "translation": translation.tolist(),
             "scaling": float(scale)
         }
-        
+ 
         with open(json_output_path, 'w') as f:
             json.dump(json_data, f, indent=4)
-        
+ 
         print(f"  Saved FDI {fdi_index}: {len(class_points)} points, {len(class_faces)} faces")
         print(f"    STL: {stl_output_path}")
         print(f"    JSON: {json_output_path}")
-
 
 def run_segmentation_with_model(cfg, model, data_folder: Path, visualize: bool = True) -> bool:
     """
@@ -242,7 +295,6 @@ def run_segmentation_with_model(cfg, model, data_folder: Path, visualize: bool =
         traceback.print_exc()
         return False
 
-
 def main_worker(cfg):
     os.makedirs(cfg.save_path, exist_ok=True)
     cfg = default_setup(cfg)
@@ -276,7 +328,6 @@ def main_worker(cfg):
     print("Postprocessing complete!")
     print("="*80)
 
-
 def segment_scan():
     parser = default_argument_parser()
     parser.add_argument("--no-visuals", action="store_true", help="Do not generate visualizations")
@@ -301,7 +352,6 @@ def segment_scan():
         dist_url=args.dist_url,
         cfg=(cfg,),
     )
-
 
 if __name__ == "__main__":
     segment_scan()
