@@ -4,7 +4,7 @@ matplotlib-inline==0.2.1
 numpy==2.3.4
 numpy-stl==3.2.0
 pandas==2.3.3
-pyvista==0.46.4
+pyvista==0.47.3
 PyYAML==6.0.3
 rtree==1.4.1
 scikit-learn==1.7.2
@@ -12,4 +12,4 @@ scipy==1.16.2
 sympy==1.13.1
 tqdm==4.67.1
 trimesh==4.9.0
-
+meshlib

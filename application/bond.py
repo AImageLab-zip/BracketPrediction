@@ -18,7 +18,6 @@ import debugpy
 import os
 import json
 import numpy as np
-import matplotlib.pyplot as plt
 from pathlib import Path
 from pointcept.engines.defaults import (
     default_argument_parser,
@@ -27,8 +26,6 @@ from pointcept.engines.defaults import (
 )
 from pointcept.engines.test import TESTERS
 from pointcept.engines.launch import launch
-from matplotlib.lines import Line2D
-import torch
 
 def process_tooth_predictions(mesh, 
                               bracket_pred:np.ndarray, 

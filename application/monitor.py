@@ -20,23 +20,21 @@ Usage:
 import os
 os.environ["VTK_OPENGL_HAS_EGL"] = "0"
 
-import pointcept
-import sys
 import json
 import time
 import argparse
-import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Set, List
 from preprocessor import Preprocessor
 import debugpy
 import requests
-import trimesh 
-import numpy as np
 import torch
 from pointcept.engines.defaults import default_config_parser, default_setup
 from pointcept.models import build_model
+import traceback
+from bond import postprocess_predictions
+from utils import *
 
 PENDING = 0
 PROCESSING = 1
@@ -244,7 +242,8 @@ class ScanMonitor:
         # Check 2: Are there processed files waiting for segmentation/bonding?
         unprocessed_for_pipeline = self.get_unprocessed_files(patient_id, patient_dir)
         return len(unprocessed_for_pipeline) > 0
-    
+
+    @timed 
     def run_segmentation(self, patient_id: str, patient_dir: Path) -> tuple[bool, str]:
         """Run segmentation using cached model for patient directory."""
         print(f"\n{'='*80}")
@@ -274,7 +273,8 @@ class ScanMonitor:
             import traceback
             traceback.print_exc()
             return False, str(e)
-    
+
+    @timed
     def run_bond_prediction(self, patient_id: str, patient_dir: Path) -> tuple[bool, str]:
         """Run bond prediction using cached model for patient directory."""
         print(f"\n{'='*80}")
@@ -301,7 +301,6 @@ class ScanMonitor:
         except Exception as e:
             print(f"❌ Bond prediction failed for {patient_id}")
             print(f"   Error: {e}")
-            import traceback
             traceback.print_exc()
             return False, str(e)
     
@@ -321,7 +320,6 @@ class ScanMonitor:
         raw_data_dir = patient_dir / "raw_data"
         if raw_data_dir.is_dir():
             # Case-insensitive glob for STL files
-            raw_stls = list(raw_data_dir.glob('[sS][tT][eE][mM]_*.[sS][tT][lL]'))            
             preprocess_success, raw_files_handled = self.prep.preprocess_raw_scans(patient_id, patient_dir) 
             if not preprocess_success:
                 print(f"❌ Pre-processing failed for {patient_id}. Aborting.")
@@ -395,7 +393,6 @@ class ScanMonitor:
         
         # First: save rotated projected points (no visuals)
         try:
-            from bond import postprocess_predictions
             postprocess_predictions(patient_dir, visualize=False)
             print("✅ Rotated points saved")
         except Exception as e:

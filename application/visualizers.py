@@ -1,12 +1,22 @@
 # Create plane points
 import matplotlib.pyplot as plt
-import numpy as np
 from pathlib import Path
 import json
 import trimesh
+import numpy as np
 import pyvista as pv
-from matplotlib import cm
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.patches import Patch
 
+AUTOBONDING_MAPPING = {
+    48: 1, 47: 2, 46: 3,
+    45: 4, 44: 5, 43: 6,
+    42: 7, 41: 8, 31: 9,
+    32: 10, 33: 11, 34: 12,
+    35: 13, 36: 14, 37: 15,
+    38: 16, 0:0
+}
+INVERSE_AUTOBONDING_MAPPING = {v: k for k, v in AUTOBONDING_MAPPING.items()}
 
 def plot_teeth(points_dict: dict, 
                v_io:np.ndarray, v_perp:np.ndarray,
@@ -311,79 +321,104 @@ def plot_jaw(data_folder:Path, raw_scan:bool = False):
         plt.close()
         print(f"  💾 Saved visualization: {output_file}")
 
-def create_segmentation_visualization(mesh:pv.DataObject, 
+def create_segmentation_visualization(mesh:trimesh.Trimesh,
                                       mask:np.ndarray,
-                                      name:str, 
+                                      name:str,
                                       output_dir: Path):
     """
     Create a visualization of the segmented dental arch from 3 viewpoints.
-    Args:
-        stl_file: Path to original STL file
-        mask_file: Path to predicted segmentation mask (.npy)
-        output_dir: Output directory for visualization
+    Uses a smooth gradient colormap with better distinguishability between teeth.
     """
-    # Load mesh and mask    
-    if len(mask) != len(mesh.points):
-        print(f"Warning: Cannot visualize - mask length mismatch")
+    # Convert to pyvista mesh
+    pv_mesh = pv.from_trimesh(mesh)
+    if len(mask) != len(pv_mesh.points):
+        print("Warning: Cannot visualize - mask length mismatch")
         return
-    
+
+    cmap_custom = LinearSegmentedColormap.from_list(
+        "smooth_dental_gradient",
+        [
+            "#1E5BFF",  # blue
+            "#00A9FF",  # sky blue
+            "#00D4C7",  # cyan/teal
+            "#38D66B",  # green
+            "#DCEB00",  # yellow-green
+            "#FFF066",  # soft yellow
+        ],
+        N=1024
+    )
     # Assign colors based on FDI index
-    unique_fdi = np.unique(mask)
-    cmap = cm.get_cmap('tab20')
-    
-    # Create color array for vertices and store color mapping for legend
+    unique_idx = np.unique(mask)
+    non_zero_fdi = unique_idx[unique_idx != 0]
+    n_teeth = len(non_zero_fdi)
     colors = np.zeros((len(mask), 3))
-    color_map = {}  # Store FDI -> color mapping
-    
-    for i, fdi_val in enumerate(unique_fdi):
-        if fdi_val == 0:  # Gum - use gray
-            color = [0.7, 0.7, 0.7]
+    color_map = {}
+    # Use only the central part of the gradient to avoid overly dark/light extremes
+    if n_teeth > 1:
+        sampled_positions = np.linspace(0.08, 0.92, n_teeth)
+    else:
+        sampled_positions = np.array([0.5])
+
+    for fdi_val in unique_idx:
+        if fdi_val == 0:
+            color = np.array([0.7, 0.7, 0.7])  # gum
             colors[mask == fdi_val] = color
             color_map[fdi_val] = color
         else:
-            rgb = cmap((i % 20) / 20.0)[:3]
+            tooth_idx = np.where(non_zero_fdi == fdi_val)[0][0]
+            rgb = np.array(cmap_custom(sampled_positions[tooth_idx])[:3])
             colors[mask == fdi_val] = rgb
             color_map[fdi_val] = rgb
-    
-    mesh['colors'] = colors
-    
+
+    pv_mesh["colors"] = colors
+
     # Define three viewpoints
     viewpoints = [
-        {'azimuth': 0, 'elevation': 0, 'title': 'Front'},      # Front view
-        {'azimuth': 90, 'elevation': 0, 'title': 'Side'},      # Side view
-        {'azimuth': 0, 'elevation': 90, 'title': 'Top'}        # Top view
+        {"azimuth": 0, "elevation": 0, "title": "Front"},
+        {"azimuth": 90, "elevation": 0, "title": "Side"},
+        {"azimuth": 0, "elevation": 90, "title": "Top"}
     ]
-    
+
     # Create figure with 3 subplots
     fig = plt.figure(figsize=(15, 5))
-    
+
     for idx, vp in enumerate(viewpoints):
         plotter = pv.Plotter(off_screen=True, window_size=[800, 800])
-        plotter.add_mesh(mesh, scalars='colors', rgb=True, lighting=False)
-        plotter.camera.azimuth = vp['azimuth']
-        plotter.camera.elevation = vp['elevation']
+        plotter.add_mesh(pv_mesh, scalars="colors", rgb=True, lighting=False)
+        plotter.camera.azimuth = vp["azimuth"]
+        plotter.camera.elevation = vp["elevation"]
         plotter.camera.zoom(1.3)
         img = plotter.screenshot(return_img=True)
         plotter.close()
-        
+
         ax = fig.add_subplot(1, 3, idx + 1)
         ax.imshow(img)
-        ax.axis('off')
-        ax.set_title(vp['title'], fontsize=14, fontweight='bold')
-    
-    # Add single legend to the figure
-    from matplotlib.patches import Patch
-    legend_elements = [Patch(facecolor=color_map[fdi], label=str(int(fdi))) 
-                       for fdi in sorted(unique_fdi)]
-    
-    fig.legend(handles=legend_elements, loc='lower center', ncol=len(unique_fdi), 
-               fontsize=10, frameon=True, bbox_to_anchor=(0.5, -0.05))
-    
-    plt.suptitle(f'Segmentation: {name}', fontsize=16, fontweight='bold')
+        ax.axis("off")
+        ax.set_title(vp["title"], fontsize=14, fontweight="bold")
+
+    # Add legend
+    legend_elements = [
+        Patch(
+            facecolor=color_map[idx],
+            label=f'FDI {INVERSE_AUTOBONDING_MAPPING[int(idx)] - 20 * ("upper" in name)}'
+        )
+        for idx in sorted(unique_idx)
+    ]
+
+    fig.legend(
+        handles=legend_elements,
+        loc="lower center",
+        ncol=min(8, len(unique_idx)),
+        fontsize=9,
+        frameon=True,
+        bbox_to_anchor=(0.5, -0.08)
+    )
+
+    plt.suptitle(f"Segmentation: {name}", fontsize=16, fontweight="bold")
     plt.tight_layout()
-    
+
     vis_output_path = output_dir / f"{name}_segmentation_views.png"
-    plt.savefig(vis_output_path, dpi=150, bbox_inches='tight')
+    plt.savefig(vis_output_path, dpi=150, bbox_inches="tight")
     plt.close()
-    
+
     print(f"  Saved visualization: {vis_output_path}")

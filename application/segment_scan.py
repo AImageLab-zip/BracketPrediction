@@ -13,7 +13,7 @@ python application/segment_scan.py \
               weight=/homes/mlugli/BracketPrediction/application/weights/segmentator_best.pth
 """
 import os
-
+import trimesh
 MAPPING = {
     1: 48, 2: 47, 3: 46,
     4: 45, 5: 44, 6: 43,
@@ -23,6 +23,7 @@ MAPPING = {
     16: 38
 }
 import debugpy
+from visualizers import create_segmentation_visualization
 from pointcept.engines.defaults import (
     default_argument_parser,
     default_config_parser,
@@ -33,11 +34,7 @@ from pathlib import Path
 from pointcept.engines.launch import launch
 import numpy as np
 import json
-import trimesh
-import torch
 from scipy.spatial import cKDTree
-from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import connected_components
 
 
 def normalize(points: np.ndarray, flip:bool=False) -> tuple[np.ndarray, np.ndarray, float]:
@@ -115,14 +112,10 @@ def clean_segmentation_mask(mask, points, faces, min_fraction=0.4):
     valid_point_indices = np.where(valid_labels)[0]
     
     if len(valid_point_indices) == 0:
-        # All labels are to be deleted, return as is
         return mask
-    
     valid_points = points[valid_point_indices]
     tree = cKDTree(valid_points)
-    
     new_mask = mask.copy()
-    
     # Reassign noisy points to nearest neighbor with different label
     for label in labels_to_delete:
         noisy_point_indices = np.where(mask == label)[0]
@@ -147,25 +140,24 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path, 
         mask_file: Path to predicted segmentation mask (.npy)
         output_dir: Output directory for processed teeth
     """
-    import pyvista as pv
-    from visualizers import create_segmentation_visualization
     
     print(f"Postprocessing {stl_file.name}...")
  
     # Load mesh and mask
-    mesh = pv.read(stl_file)
+    mesh = trimesh.load(str(stl_file), process=False)
+    mesh.merge_vertices()
     mask = np.load(mask_file)
     
-    if len(mask) != len(mesh.points):
-        print(f"Warning: Mask length ({len(mask)}) doesn't match points ({len(mesh.points)})")
+    if len(mask) != len(mesh.vertices):
+        print(f"Warning: Mask length ({len(mask)}) doesn't match points ({len(mesh.vertices)})")
         return
     
     base_name = stl_file.stem
     teeth_output_dir = output_dir / "teeth"
     teeth_output_dir.mkdir(parents=True, exist_ok=True)
     
-    points = mesh.points
-    faces = mesh.faces.reshape(-1, 4)[:, 1:]  # Remove the '3' prefix from each face
+    points = np.array(mesh.vertices)
+    faces = np.array(mesh.faces)
     cleaned_mask = clean_segmentation_mask(mask, points, faces)
     
     if visualize:
@@ -203,21 +195,24 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path, 
         # Remap face indices to new point array
         old_to_new = {old_idx: new_idx for new_idx, old_idx in enumerate(class_indices)}
         class_faces = np.array([[old_to_new[idx] for idx in face] for face in class_faces_old_idx])
- 
-        # Create PyVista mesh for this tooth
-        # Faces need to be in format: [3, v0, v1, v2, 3, v3, v4, v5, ...]
+
+        # Create tooth mesh
         try:
-            faces_pv = np.hstack([[3] + list(face) for face in class_faces])
-            tooth_mesh = pv.PolyData(normalized_class_points, faces_pv)
-        except:
+            tooth_mesh = trimesh.Trimesh(
+                vertices=normalized_class_points,
+                faces=class_faces,
+                process=False
+            )
+        except Exception:
             print(f"⚠️ Malformed tooth mesh for class {fdi_index}")
+            continue  # fix: was missing, would crash on .save() below
 
  
-        # Save STL file
+        # Save tooth
         if "lower" in base_name: fdi_index = MAPPING[fdi_index]
         if "upper" in base_name: fdi_index = MAPPING[fdi_index]-20
         stl_output_path = teeth_output_dir / f"{base_name}_FDI_{fdi_index}.stl"
-        tooth_mesh.save(stl_output_path)
+        tooth_mesh.export(str(stl_output_path))
  
         # Save normalization parameters to JSON
         json_output_path = teeth_output_dir / f"{base_name}_FDI_{fdi_index}.json"
@@ -225,10 +220,8 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path, 
             "translation": translation.tolist(),
             "scaling": float(scale)
         }
- 
         with open(json_output_path, 'w') as f:
             json.dump(json_data, f, indent=4)
- 
         print(f"  Saved FDI {fdi_index}: {len(class_points)} points, {len(class_faces)} faces")
         print(f"    STL: {stl_output_path}")
         print(f"    JSON: {json_output_path}")
@@ -236,7 +229,7 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path, 
 def run_segmentation_with_model(cfg, model, data_folder: Path, visualize: bool = True) -> bool:
     """
     Run segmentation with a pre-loaded model.
-    
+ 
     Args:
         cfg: Configuration object
         model: Pre-loaded segmentation model
