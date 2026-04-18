@@ -18,6 +18,7 @@ import debugpy
 import os
 import json
 import numpy as np
+import trimesh
 from pathlib import Path
 from pointcept.engines.defaults import (
     default_argument_parser,
@@ -26,6 +27,7 @@ from pointcept.engines.defaults import (
 )
 from pointcept.engines.test import TESTERS
 from pointcept.engines.launch import launch
+from visualizers import plot_teeth
 
 def process_tooth_predictions(mesh, 
                               bracket_pred:np.ndarray, 
@@ -64,10 +66,7 @@ def process_tooth_predictions(mesh,
         facial_pred: facial point coordinates [x, y, z]
         planar_pred: list of planar points
         cusp_pred: list of cusp points
-        visualize: whether to generate visualizations
     """
-    import trimesh
-    from visualizers import plot_teeth
     
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -249,11 +248,9 @@ def process_tooth_predictions(mesh,
     molars_premolars = [14,15,16,17,18,24,25,26,27,28,34,35,36,37,38,44,45,46,47,48]
     if fdi not in molars_premolars and 'Cusp' in plot_points:
         del plot_points['Cusp']
-    
     if visualize:
         try:
-            plot_teeth(plot_points, v_io, v_perp,
-                       vertices, patient_id, fdi, output_dir)
+            plot_teeth(plot_points, v_io, v_perp, vertices, patient_id, fdi, output_dir)
         except Exception as e:
             print(f"  ⚠️  Tooth visualization failed: {e}")
     return json_data
@@ -265,10 +262,7 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
     Args:
         data_folder: Path to the data folder containing predictions
         visualize: toggles visualization
-    """
-    import trimesh
-    from visualizers import plot_jaw
-    
+    """ 
     output_reg_path = data_folder / "output_reg" / "results"
     teeth_path = data_folder / "output_seg" / "teeth"
     viz_dir = data_folder /  "output_reg" / "plots"
@@ -535,7 +529,7 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
     print(f"\n✅ Post-processing complete.")
 
 
-def run_bond_with_model(cfg, model, data_folder: Path, visualize: bool = True) -> bool:
+def run_bond_with_model(cfg, model, data_folder: Path) -> bool:
     """
     Run bond prediction with a pre-loaded model.
     
@@ -543,8 +537,6 @@ def run_bond_with_model(cfg, model, data_folder: Path, visualize: bool = True) -
         cfg: Configuration object
         model: Pre-loaded bond prediction model
         data_folder: Path to data folder containing segmentation results
-        visualize: Whether to generate visualizations
-        
     Returns:
         bool: True if successful, False otherwise
     """
@@ -561,8 +553,7 @@ def run_bond_with_model(cfg, model, data_folder: Path, visualize: bool = True) -
         cfg._cfg_dict["data_root"] = str(teeth_path)
         cfg._cfg_dict["save_path"] = str(output_path)
         cfg._cfg_dict["data"]["test"]["data_root"] = str(teeth_path)
-        cfg.no_visuals = not visualize
-        
+ 
         os.makedirs(output_path, exist_ok=True)
         
         # Set up configuration
@@ -594,7 +585,7 @@ def main_worker(cfg):
     test_cfg = dict(cfg=cfg, **cfg.test)
     tester = TESTERS.build(test_cfg)
     tester.test()
-    
+ 
     # Add post-processing and visualization after testing
     print("\n" + "="*60)
     print("Testing complete. Starting post-processing...")
@@ -607,7 +598,6 @@ def main_worker(cfg):
 
 def main():
     parser = default_argument_parser()
-    parser.add_argument("--no-visuals", action="store_true", help="Do not generate visualizations")
     args = parser.parse_args()
     if args.debug:
         print("Hello, happy debugging.")

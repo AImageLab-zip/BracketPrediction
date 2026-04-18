@@ -131,7 +131,7 @@ def clean_segmentation_mask(mask, points, faces, min_fraction=0.4):
     
     return new_mask
 
-def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path, visualize: bool = True):
+def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path):
     """
     Postprocess segmentation results: split by tooth, normalize, and save.
     
@@ -160,16 +160,13 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path, 
     faces = np.array(mesh.faces)
     cleaned_mask = clean_segmentation_mask(mask, points, faces)
     
-    if visualize:
-        try:
-            create_segmentation_visualization(mesh, cleaned_mask, stl_file.stem, output_dir)
-        except Exception as e:
-            print(f"  ⚠️  Visualization failed (continuing anyway): {e}")
-    
+    try: create_segmentation_visualization(mesh, cleaned_mask, stl_file.stem, output_dir)
+    except Exception as e: print(f"  ⚠️  Visualization failed (continuing anyway): {e}")
+
     # Get unique FDI indices from cleaned mask (excluding 0 which is gum)
     unique_fdi_indices = np.unique(cleaned_mask)
     print(f"Found {len(unique_fdi_indices)} unique classes: {unique_fdi_indices}")
-    
+ 
     # Compute dilation masks for including gum around teeth
     dilation_masks = compute_dilation_masks(cleaned_mask, points)
 
@@ -226,7 +223,7 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path, 
         print(f"    STL: {stl_output_path}")
         print(f"    JSON: {json_output_path}")
 
-def run_segmentation_with_model(cfg, model, data_folder: Path, visualize: bool = True) -> bool:
+def run_segmentation_with_model(cfg, model, data_folder: Path) -> bool:
     """
     Run segmentation with a pre-loaded model.
  
@@ -234,8 +231,7 @@ def run_segmentation_with_model(cfg, model, data_folder: Path, visualize: bool =
         cfg: Configuration object
         model: Pre-loaded segmentation model
         data_folder: Path to data folder containing STL files
-        visualize: Whether to generate visualizations
-        
+ 
     Returns:
         bool: True if successful, False otherwise
     """
@@ -244,7 +240,6 @@ def run_segmentation_with_model(cfg, model, data_folder: Path, visualize: bool =
         cfg._cfg_dict["data_root"] = str(data_folder)
         cfg._cfg_dict["save_path"] = str(Path(data_folder) / "output_seg")
         cfg._cfg_dict["data"]["test"]["data_root"] = str(data_folder)
-        cfg.no_visuals = not visualize
         
         os.makedirs(cfg.save_path, exist_ok=True)
         
@@ -269,12 +264,10 @@ def run_segmentation_with_model(cfg, model, data_folder: Path, visualize: bool =
         for stl_file in stl_files:
             # Find corresponding prediction mask
             mask_file = output_folder / "result" / f"{stl_file.stem}_pred.npy"
- 
             if not mask_file.exists():
                 print(f"Warning: No prediction found for {stl_file.name}, skipping...")
                 continue
-            
-            postprocess_segmentation(stl_file, mask_file, output_folder, visualize=visualize)
+            postprocess_segmentation(stl_file, mask_file, output_folder)
         
         print("\n" + "="*80)
         print("Postprocessing complete!")
@@ -302,8 +295,7 @@ def main_worker(cfg):
     
     data_folder = Path(cfg.data_root)
     output_folder = Path(cfg.save_path)
-    visualize = not cfg.no_visuals
-    
+ 
     # Find STL files in data folder
     stl_files = list(data_folder.glob("*.stl"))
     
@@ -315,7 +307,7 @@ def main_worker(cfg):
             print(f"Warning: No prediction found for {stl_file.name}, skipping...")
             continue
         
-        postprocess_segmentation(stl_file, mask_file, output_folder, visualize=visualize)
+        postprocess_segmentation(stl_file, mask_file, output_folder)
     
     print("\n" + "="*80)
     print("Postprocessing complete!")

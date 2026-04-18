@@ -31,9 +31,11 @@ import debugpy
 import requests
 import torch
 from pointcept.engines.defaults import default_config_parser, default_setup
+from segment_scan import run_segmentation_with_model
 from pointcept.models import build_model
 import traceback
-from bond import postprocess_predictions
+from bond import postprocess_predictions, run_bond_with_model
+from visualizers import plot_jaw
 from utils import *
 
 PENDING = 0
@@ -51,7 +53,6 @@ class ScanMonitor:
         bond_weight: Path,
         check_interval: int = 10,
         status_file: str = "processing_status.json",
-        no_visuals: bool = False
     ):
         self.data_root = Path(data_root)
         self.seg_config = Path(seg_config)
@@ -60,7 +61,6 @@ class ScanMonitor:
         self.bond_weight = Path(bond_weight)
         self.check_interval = check_interval
         self.status_file = self.data_root / status_file  # Status file inside data_root
-        self.no_visuals = no_visuals
         self.prep = Preprocessor()
 
         # Validate paths
@@ -89,8 +89,8 @@ class ScanMonitor:
         print(f"   Status file: {self.status_file}")
     
     def _load_models(self):
-        """Load both segmentation and bond prediction models into GPU memory."""
-        print("\n🔄 Loading models into GPU memory...")
+        """Load both segmentation and bond prediction models into GPU."""
+        print("\n🔄 Loading models on GPU...")
         try:
             # Load segmentation model
             self.seg_cfg = default_config_parser(str(self.seg_config), {})
@@ -110,7 +110,7 @@ class ScanMonitor:
             self.bond_model.load_state_dict(checkpoint.get("state_dict", checkpoint))
             self.bond_model = self.bond_model.cuda()
             self.bond_model.eval()
-            print("   ✅ Bond prediction model loaded")
+            print("   ✅ Landmark prediction model loaded")
         except Exception as e:
             print(f"   ❌ Error loading models: {e}")
             raise
@@ -196,13 +196,13 @@ class ScanMonitor:
     def get_unprocessed_files(self, patient_id: str, patient_dir: Path) -> List[str]:
         """Get list of STL files that haven't been processed yet."""
         current_files = set(self.get_stl_files(patient_dir))
-        
+ 
         if patient_id not in self.status:
             return list(current_files)
-        
+ 
         processed_files = set(self.status[patient_id].get("processed_files", []))
         failed_files = set(self.status[patient_id].get("failed_files", []))
-        
+ 
         # Return files that are neither processed nor failed
         unprocessed = current_files - processed_files - failed_files
         return sorted(list(unprocessed))
@@ -211,7 +211,7 @@ class ScanMonitor:
         """Get information about scan files."""
         has_lower = any("lower" in f.lower() for f in files)
         has_upper = any("upper" in f.lower() for f in files)
-        
+ 
         return {
             "num_files": len(files),
             "has_lower": has_lower,
@@ -238,7 +238,7 @@ class ScanMonitor:
         # Check 1: Are there new raw files to preprocess?
         if self.has_new_raw_files(patient_dir):
             return True
-        
+ 
         # Check 2: Are there processed files waiting for segmentation/bonding?
         unprocessed_for_pipeline = self.get_unprocessed_files(patient_id, patient_dir)
         return len(unprocessed_for_pipeline) > 0
@@ -251,26 +251,23 @@ class ScanMonitor:
         print(f"{'='*80}")
 
         try:
-            from segment_scan import run_segmentation_with_model
-            
+ 
             success = run_segmentation_with_model(
                 cfg=self.seg_cfg,
                 model=self.seg_model,
                 data_folder=patient_dir,
-                visualize=not self.no_visuals
             )
-            
+ 
             if success:
                 message = f"✅ Segmentation completed for {patient_id}"
                 print(message)
                 return True, message
             else:
                 return False, "Segmentation processing failed"
-                
+ 
         except Exception as e:
             print(f"❌ Segmentation failed for {patient_id}")
             print(f"   Error: {e}")
-            import traceback
             traceback.print_exc()
             return False, str(e)
 
@@ -280,34 +277,32 @@ class ScanMonitor:
         print(f"\n{'='*80}")
         print(f"📍 Running BOND PREDICTION for patient {patient_id}")
         print(f"{'='*80}")
-        
+ 
         try:
-            from bond import run_bond_with_model
             
             success = run_bond_with_model(
                 cfg=self.bond_cfg,
                 model=self.bond_model,
                 data_folder=patient_dir,
-                visualize=not self.no_visuals
             )
-            
+ 
             if success:
                 message = f"✅ Bond prediction completed for {patient_id}"
                 print(message)
                 return True, message
             else:
                 return False, "Bond prediction processing failed"
-                
+        
         except Exception as e:
             print(f"❌ Bond prediction failed for {patient_id}")
             print(f"   Error: {e}")
             traceback.print_exc()
             return False, str(e)
-    
+ 
     def process_patient(self, patient_id: str, patient_dir: Path):
         """Process a patient through the full pipeline: pre-processing, segmentation, bonding."""
         timestamp = datetime.now().isoformat()
-        
+ 
         # Initialize patient status if not exists
         if patient_id not in self.status:
             self.status[patient_id] = {
@@ -339,13 +334,13 @@ class ScanMonitor:
         # --- Stage 2: Segmentation and Bond Prediction ---
         # Get unprocessed files (e.g., upper.stl, lower.stl that were just created)
         unprocessed_files = self.get_unprocessed_files(patient_id, patient_dir)
-        
+ 
         if not unprocessed_files:
             print(f"  No new files for segmentation/bonding for {patient_id}")
             return
-        
+ 
         scan_info = self.get_scan_info(unprocessed_files)
-        
+ 
         # Add processing entry to history
         processing_entry = {
             "started_at": timestamp,
@@ -354,7 +349,7 @@ class ScanMonitor:
             "has_lower": scan_info["has_lower"],
             "has_upper": scan_info["has_upper"]
         }
-        
+ 
         print(f"\n{'#'*80}")
         print(f"# Processing Patient: {patient_id}")
         print(f"# Started at: {timestamp}")
@@ -390,7 +385,7 @@ class ScanMonitor:
             self.status[patient_id]["failed_files"] = list(set(self.status[patient_id]["failed_files"]))
             self.save_status()
             return
-        
+ 
         # First: save rotated projected points (no visuals)
         try:
             postprocess_predictions(patient_dir, visualize=False)
@@ -409,7 +404,6 @@ class ScanMonitor:
             print(f"⚠️ Post-processing/teeth visualization failed: {e}")
 
         try:
-            from visualizers import plot_jaw
             plot_jaw(patient_dir, raw_scan=False)
             plot_jaw(patient_dir, raw_scan=True)
             print(f"✅ Visualizations complete")
@@ -474,7 +468,6 @@ def main():
     parser.add_argument("--bond-weight",type=str,required=True,help="Path to bond prediction model weights")
     parser.add_argument("--check-interval",type=int,default=10,help="Interval in seconds between checks (default: 3)")
     parser.add_argument("--status-file",type=str,default="processing_status.json",help="Name of status file (default: processing_status.json)")
-    parser.add_argument("--prod", action="store_true", help="Run in production mode (no visuals)") 
     parser.add_argument("--debug", action="store_true", help="Wait for debugger to attach")
     args = parser.parse_args()
     if args.debug:
@@ -491,7 +484,6 @@ def main():
         bond_weight=args.bond_weight,
         check_interval=args.check_interval,
         status_file=args.status_file,
-        no_visuals=args.prod
     ) 
     monitor.run()
 

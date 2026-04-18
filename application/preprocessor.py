@@ -4,7 +4,7 @@ import json
 import numpy as np
 
 class Preprocessor:
-    
+ 
     def __init__(self):
         pass
 
