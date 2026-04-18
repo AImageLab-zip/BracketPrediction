@@ -35,24 +35,22 @@ from pointcept.engines.launch import launch
 import numpy as np
 import json
 from scipy.spatial import cKDTree
+from utils import *
 
 
 def normalize(points: np.ndarray, flip:bool=False) -> tuple[np.ndarray, np.ndarray, float]:
     """
     Rotate 180° around y-axis (for upper scan), then normalize points to unit sphere centered at origin.
     Returns: (normalized_points, translation, scale)
+
+    In production, the model runs on a version of the upper scan that is rotated
+    of an extra 180 degrees around the Y axis, such that the lower and upper jaws are
+    "overlapped", not registered anymore. Since during training we don't make the model
+    robust to this sort of flip, we need to save the tooth meshes oriented as the model
+    is used to. The lower jaw scan is untached, so we don't apply the extra rotation.
     """
-    # In production, the model runs on a version of the upper scan that is rotated
-    # of an extra 180 degrees around the Y axis, such that the lower and upper jaws are
-    # "overlapped", not registered anymore. Since during training we don't make the model
-    # robust to this sort of flip, we need to save the tooth meshes oriented as the model
-    # is used to. The lower jaw scan is untached, so we don't apply the extra rotation.
     if flip:
-        rotation_matrix = np.array([
-            [-1, 0, 0],
-            [0, 1, 0],
-            [0, 0, -1]
-        ])
+        rotation_matrix = rotation_180_y()
         rotated_points = points @ rotation_matrix.T
     else: rotated_points = points
     
@@ -64,7 +62,6 @@ def normalize(points: np.ndarray, flip:bool=False) -> tuple[np.ndarray, np.ndarr
     normalized_points = centered_points * scale
     
     return normalized_points, centroid, scale
-
 
 def compute_dilation_masks(mask: np.ndarray, vertices: np.ndarray) -> dict[int, np.ndarray]:
     tooth_labels = np.unique(mask)
@@ -147,15 +144,13 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path):
     mesh = trimesh.load(str(stl_file), process=False)
     mesh.merge_vertices()
     mask = np.load(mask_file)
-    
-    if len(mask) != len(mesh.vertices):
-        print(f"Warning: Mask length ({len(mask)}) doesn't match points ({len(mesh.vertices)})")
-        return
-    
+
+    if not is_consistent(mesh.vertices, mask): return
+ 
     base_name = stl_file.stem
     teeth_output_dir = output_dir / "teeth"
     teeth_output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     points = np.array(mesh.vertices)
     faces = np.array(mesh.faces)
     cleaned_mask = clean_segmentation_mask(mask, points, faces)
@@ -292,23 +287,21 @@ def main_worker(cfg):
     print("\n" + "="*80)
     print("Starting postprocessing...")
     print("="*80 + "\n")
-    
+ 
     data_folder = Path(cfg.data_root)
     output_folder = Path(cfg.save_path)
  
     # Find STL files in data folder
     stl_files = list(data_folder.glob("*.stl"))
-    
+ 
     for stl_file in stl_files:
         # Find corresponding prediction mask
         mask_file = output_folder / "result" / f"{stl_file.stem}_pred.npy"
-        
         if not mask_file.exists():
             print(f"Warning: No prediction found for {stl_file.name}, skipping...")
             continue
-        
         postprocess_segmentation(stl_file, mask_file, output_folder)
-    
+
     print("\n" + "="*80)
     print("Postprocessing complete!")
     print("="*80)

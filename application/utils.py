@@ -1,6 +1,7 @@
 from functools import wraps
 from meshlib import mrmeshnumpy as mr
 import time
+import numpy as np
 from pathlib import Path
 
 def timed(func):
@@ -39,3 +40,21 @@ def custom_remesh(path:Path,
 @timed
 def save_remeshed(mesh):
         mr.saveMesh(mesh, "remeshed.stl")
+
+def is_consistent(vertices:np.ndarray, mask:np.ndarray):
+    if len(mask) != len(vertices):
+        print(f"Warning: Mask length ({len(mask)}) doesn't match points ({len(vertices)})")
+        return False
+    return True
+
+def rotation_180_y():
+    return np.array([
+            [-1, 0, 0],
+            [0, 1, 0],
+            [0, 0, -1]
+        ])
+
+def parse_tooth(tooth:str) -> list[str, str, int]:
+    # Parse tooth_key: expected format "STEM_lower_0002_FDI_47"
+    _, jaw, patient_id, _, fdi = tooth.split("_")
+    return jaw, patient_id, int(fdi)
