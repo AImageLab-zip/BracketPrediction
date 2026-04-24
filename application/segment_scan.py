@@ -282,7 +282,7 @@ def main_worker(cfg):
     test_cfg = dict(cfg=cfg, **cfg.test)
     tester = TESTERS.build(test_cfg)
     tester.test()
-    
+
     # Postprocessing: split and normalize teeth
     print("\n" + "="*80)
     print("Starting postprocessing...")
@@ -321,7 +321,6 @@ def segment_scan():
     cfg._cfg_dict["data_root"] = args.options["data_folder"]
     cfg._cfg_dict["save_path"] = str(Path(args.options["data_folder"]) / "output_seg") 
     cfg._cfg_dict["data"]["test"]["data_root"] = args.options["data_folder"]
-    cfg.no_visuals = args.no_visuals
     launch(
         main_worker,
         num_gpus_per_machine=args.num_gpus,

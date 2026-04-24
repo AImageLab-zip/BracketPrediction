@@ -88,29 +88,23 @@ class ScanMonitor:
         print(f"   Check interval: {self.check_interval}s")
         print(f"   Status file: {self.status_file}")
     
+    def _load_model(self, config:Path, saved_checkpoint:Path):
+        cfg = default_setup(default_config_parser(str(config), {}))
+        model = build_model(cfg.model)
+        checkpoint = torch.load(str(saved_checkpoint), weights_only=False)
+        model.load_state_dict(checkpoint.get("state_dict", checkpoint))
+        model = model.cuda()
+        model.eval()
+        print("   ✅ Model Loaded")
+        return cfg, model
+
     def _load_models(self):
         """Load both segmentation and bond prediction models into GPU."""
         print("\n🔄 Loading models on GPU...")
         try:
-            # Load segmentation model
-            self.seg_cfg = default_config_parser(str(self.seg_config), {})
-            self.seg_cfg = default_setup(self.seg_cfg)
-            self.seg_model = build_model(self.seg_cfg.model)
-            checkpoint = torch.load(str(self.seg_weight), weights_only=False)
-            self.seg_model.load_state_dict(checkpoint.get("state_dict", checkpoint))
-            self.seg_model = self.seg_model.cuda()
-            self.seg_model.eval()
-            print("   ✅ Segmentation model loaded")
-            
-            # Load bond prediction model
-            self.bond_cfg = default_config_parser(str(self.bond_config), {})
-            self.bond_cfg = default_setup(self.bond_cfg)
-            self.bond_model = build_model(self.bond_cfg.model)
-            checkpoint = torch.load(str(self.bond_weight), weights_only=False)
-            self.bond_model.load_state_dict(checkpoint.get("state_dict", checkpoint))
-            self.bond_model = self.bond_model.cuda()
-            self.bond_model.eval()
-            print("   ✅ Landmark prediction model loaded")
+            # Load segmentation and landmark models
+            self.seg_cfg, self.seg_model = self._load_model(self.seg_config, self.seg_weight)
+            self.bond_cfg, self.bond_model = self._load_model(self.bond_config, self.bond_weight)
         except Exception as e:
             print(f"   ❌ Error loading models: {e}")
             raise
@@ -175,17 +169,11 @@ class ScanMonitor:
     def find_patient_directories(self) -> Set[str]:
         """Find all patient directories that contain a 'raw_data' subdirectory or STL files."""
         patient_dirs = set()
-        
         for item in self.data_root.iterdir():
-            if item.is_dir() and item.name != "__pycache__":
-                # A patient dir is one that contains raw data to be processed,
-                # or already processed STL files for the next pipeline steps.
-                has_raw_data = (item / "raw_data").is_dir()
-                has_stl_files = any(item.glob("*.stl"))
-                
-                if has_raw_data or has_stl_files:
-                    patient_dirs.add(item.name)
-        
+            if not item.is_dir(): continue
+            has_raw_data = (item / "raw_data").is_dir()
+            has_stl_files = any(item.glob("*.stl"))
+            if has_raw_data or has_stl_files: patient_dirs.add(item.name)
         return patient_dirs
     
     def get_stl_files(self, patient_dir: Path) -> List[str]:
@@ -196,13 +184,9 @@ class ScanMonitor:
     def get_unprocessed_files(self, patient_id: str, patient_dir: Path) -> List[str]:
         """Get list of STL files that haven't been processed yet."""
         current_files = set(self.get_stl_files(patient_dir))
- 
-        if patient_id not in self.status:
-            return list(current_files)
- 
+        if patient_id not in self.status: return list(current_files)
         processed_files = set(self.status[patient_id].get("processed_files", []))
         failed_files = set(self.status[patient_id].get("failed_files", []))
- 
         # Return files that are neither processed nor failed
         unprocessed = current_files - processed_files - failed_files
         return sorted(list(unprocessed))
@@ -211,7 +195,6 @@ class ScanMonitor:
         """Get information about scan files."""
         has_lower = any("lower" in f.lower() for f in files)
         has_upper = any("upper" in f.lower() for f in files)
- 
         return {
             "num_files": len(files),
             "has_lower": has_lower,
@@ -222,23 +205,18 @@ class ScanMonitor:
     def has_new_raw_files(self, patient_dir: Path) -> bool:
         """Check if there are new, unprocessed files in the raw_data directory."""
         raw_data_dir = patient_dir / "raw_data"
-        if not raw_data_dir.is_dir():
-            return False
-
+        if not raw_data_dir.is_dir(): return False
         # Case-insensitive glob for STL files
         raw_stls = list(raw_data_dir.glob('[sS][tT][eE][mM]_*.[sS][tT][lL]'))
         for raw_stl in raw_stls:
             # If the processed file doesn't exist in the parent directory, it's new.
-            if not (patient_dir / raw_stl.name).exists():
-                return True
+            if not (patient_dir / raw_stl.name).exists(): return True
         return False
 
     def should_process(self, patient_id: str, patient_dir: Path) -> bool:
         """Check if patient directory has new raw files or unprocessed processed files."""
         # Check 1: Are there new raw files to preprocess?
-        if self.has_new_raw_files(patient_dir):
-            return True
- 
+        if self.has_new_raw_files(patient_dir): return True
         # Check 2: Are there processed files waiting for segmentation/bonding?
         unprocessed_for_pipeline = self.get_unprocessed_files(patient_id, patient_dir)
         return len(unprocessed_for_pipeline) > 0
@@ -404,7 +382,7 @@ class ScanMonitor:
             print(f"⚠️ Post-processing/teeth visualization failed: {e}")
 
         try:
-            plot_jaw(patient_dir, raw_scan=False)
+            #plot_jaw(patient_dir, raw_scan=False)
             plot_jaw(patient_dir, raw_scan=True)
             print(f"✅ Visualizations complete")
         except Exception as e:
@@ -422,7 +400,7 @@ class ScanMonitor:
         print(f"   Processed files: {unprocessed_files}")
         print(f"   Total processed files: {len(self.status[patient_id]['processed_files'])}")
         print(f"{'='*80}\n")
-    
+ 
     def run(self):
         """Main monitoring loop."""
         print(f"\n{'='*80}")

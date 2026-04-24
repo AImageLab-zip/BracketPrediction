@@ -12,6 +12,7 @@ weights
 data
 logs
 application/data
+application/data_debug
 outputs/
 data/
 submit_all_train_jobs.sh

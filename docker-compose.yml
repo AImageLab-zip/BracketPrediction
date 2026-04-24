@@ -8,7 +8,9 @@ services:
     shm_size: "8gb"
     volumes:
       - ./application/data:/workspace/application/data
-      - ./run_monitor_map_new.sh:/workspace/run_monitor_map_new.sh  # Mount the script
+      - ./application/data_debug:/workspace/application/data_debug
+      - ./run_monitor_map_new.sh:/workspace/run_monitor_map_new.sh
+      - ./run_monitor_map_new.sh:/workspace/run_monitor_debug.sh
     environment:
       - PYTHONPATH=/workspace
       - DISPLAY=:99
