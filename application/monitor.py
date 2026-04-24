@@ -138,25 +138,30 @@ class ScanMonitor:
         return {}
 
     def update_status(self, job_id: str, status: int, message: str="placeholder"):
-        url = f"https://autobonding.ing.unimore.it/api/update/{job_id}/"
-        print("Calling:", url)
-        payload = {
-            "status": status,
-            "logs": message
-        }
-        headers = {
-            "Authorization": f"Bearer {os.getenv('API_TOKEN')}",
-            "Content-Type": "application/json"
-        }
-        response = requests.post(
-            url,
-            json=payload,
-            headers=headers,
-            timeout=5
-        )
-
-        response.raise_for_status()
-        return response.json()
+        """Update status on remote API. Returns True if successful, False otherwise."""
+        try:
+            url = f"https://autobonding.ing.unimore.it/api/update/{job_id}/"
+            print("Calling:", url)
+            payload = {
+                "status": status,
+                "logs": message
+            }
+            headers = {
+                "Authorization": f"Bearer {os.getenv('API_TOKEN')}",
+                "Content-Type": "application/json"
+            }
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=5
+            )
+            response.raise_for_status()
+            print(f"   ✅ Status updated on API: {status}")
+            return True
+        except requests.exceptions.RequestException as e:
+            print(f"   ⚠️  Failed to update status on API: {e}")
+            return False
 
     def save_status(self):
         """Save processing status to JSON file."""
@@ -215,6 +220,17 @@ class ScanMonitor:
 
     def should_process(self, patient_id: str, patient_dir: Path) -> bool:
         """Check if patient directory has new raw files or unprocessed processed files."""
+        # Don't process if already being processed (prevent duplicate job processing)
+        if patient_id in self.status:
+            processing_history = self.status[patient_id].get("processing_history", [])
+            if processing_history:
+                last_entry = processing_history[-1]
+                # If the last entry is marked as "processing", skip to avoid duplicates
+                if last_entry.get("status") == "processing":
+                    if "completed_at" not in last_entry and "failed_at" not in last_entry:
+                        print(f"  ⏳ Skipping {patient_id}: already being processed")
+                        return False
+        
         # Check 1: Are there new raw files to preprocess?
         if self.has_new_raw_files(patient_dir): return True
         # Check 2: Are there processed files waiting for segmentation/bonding?
@@ -325,8 +341,11 @@ class ScanMonitor:
             "files_to_process": unprocessed_files,
             "num_files": scan_info["num_files"],
             "has_lower": scan_info["has_lower"],
-            "has_upper": scan_info["has_upper"]
+            "has_upper": scan_info["has_upper"],
+            "status": "processing"  # Mark as processing immediately
         }
+        self.status[patient_id]["processing_history"].append(processing_entry)
+        self.save_status()
  
         print(f"\n{'#'*80}")
         print(f"# Processing Patient: {patient_id}")
@@ -338,11 +357,12 @@ class ScanMonitor:
         seg_success, message = self.run_segmentation(patient_id, patient_dir)
         
         if not seg_success:
-            self.update_status(patient_dir.name, 3, message)
+            self.update_status(patient_dir.name, FAILED, message)
             processing_entry["status"] = "failed"
             processing_entry["failed_at"] = datetime.now().isoformat()
             processing_entry["error"] = "Segmentation failed"
-            self.status[patient_id]["processing_history"].append(processing_entry)
+            # Update the last entry instead of appending (we already added it at start)
+            self.status[patient_id]["processing_history"][-1] = processing_entry
             # Mark files as failed
             self.status[patient_id]["failed_files"].extend(unprocessed_files)
             self.status[patient_id]["failed_files"] = list(set(self.status[patient_id]["failed_files"]))
@@ -353,11 +373,12 @@ class ScanMonitor:
         bond_success, message = self.run_bond_prediction(patient_id, patient_dir)
         
         if not bond_success:
-            self.update_status(patient_dir.name, 3, message)
+            self.update_status(patient_dir.name, FAILED, message)
             processing_entry["status"] = "failed"
             processing_entry["failed_at"] = datetime.now().isoformat()
             processing_entry["error"] = "Bond prediction failed"
-            self.status[patient_id]["processing_history"].append(processing_entry)
+            # Update the last entry instead of appending (we already added it at start)
+            self.status[patient_id]["processing_history"][-1] = processing_entry
             # Mark files as failed
             self.status[patient_id]["failed_files"].extend(unprocessed_files)
             self.status[patient_id]["failed_files"] = list(set(self.status[patient_id]["failed_files"]))
@@ -372,7 +393,7 @@ class ScanMonitor:
             print(f"⚠️ Failed to save rotated points: {e}")
 
         # THEN notify the server that processing finished
-        self.update_status(patient_dir.name, 2, "Processing completed!")
+        self.update_status(patient_dir.name, COMPLETED, "Processing completed!")
 
         # NOW generate visualizations (single-tooth + jaw)
         try:
@@ -390,7 +411,8 @@ class ScanMonitor:
         
         processing_entry["status"] = "completed"
         processing_entry["completed_at"] = datetime.now().isoformat()
-        self.status[patient_id]["processing_history"].append(processing_entry)
+        # Update the last entry instead of appending (we already added it at start)
+        self.status[patient_id]["processing_history"][-1] = processing_entry
         self.status[patient_id]["processed_files"].extend(unprocessed_files)
         self.status[patient_id]["processed_files"] = list(set(self.status[patient_id]["processed_files"]))
         self.save_status()
@@ -418,7 +440,7 @@ class ScanMonitor:
                     patient_dir = self.data_root / patient_id 
                     if self.should_process(patient_id, patient_dir):
                         print(f"  Processing {patient_id}: Found new files or tasks.")
-                        self.update_status(patient_dir.name, 1, "Processing")
+                        self.update_status(patient_dir.name, PROCESSING, "Processing")
                         self.process_patient(patient_id, patient_dir)
 
                 time.sleep(self.check_interval)

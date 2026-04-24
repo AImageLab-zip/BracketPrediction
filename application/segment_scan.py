@@ -128,42 +128,16 @@ def clean_segmentation_mask(mask, points, faces, min_fraction=0.4):
     
     return new_mask
 
-def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path):
-    """
-    Postprocess segmentation results: split by tooth, normalize, and save.
-    
-    Args:
-        stl_file: Path to original STL file
-        mask_file: Path to predicted segmentation mask (.npy)
-        output_dir: Output directory for processed teeth
-    """
-    
-    print(f"Postprocessing {stl_file.name}...")
- 
-    # Load mesh and mask
-    mesh = trimesh.load(str(stl_file), process=False)
-    mesh.merge_vertices()
-    mask = np.load(mask_file)
-
-    if not is_consistent(mesh.vertices, mask): return
- 
-    base_name = stl_file.stem
-    teeth_output_dir = output_dir / "teeth"
-    teeth_output_dir.mkdir(parents=True, exist_ok=True)
-
-    points = np.array(mesh.vertices)
-    faces = np.array(mesh.faces)
-    cleaned_mask = clean_segmentation_mask(mask, points, faces)
-    
-    try: create_segmentation_visualization(mesh, cleaned_mask, stl_file.stem, output_dir)
-    except Exception as e: print(f"  ⚠️  Visualization failed (continuing anyway): {e}")
-
-    # Get unique FDI indices from cleaned mask (excluding 0 which is gum)
-    unique_fdi_indices = np.unique(cleaned_mask)
+def dilate_and_save_teeth(mask:np.ndarray, 
+                          points:np.ndarray, 
+                          faces:np.ndarray, 
+                          base_name:str,
+                          teeth_output_dir:Path):
+    unique_fdi_indices = np.unique(mask)
     print(f"Found {len(unique_fdi_indices)} unique classes: {unique_fdi_indices}")
  
     # Compute dilation masks for including gum around teeth
-    dilation_masks = compute_dilation_masks(cleaned_mask, points)
+    dilation_masks = compute_dilation_masks(mask, points)
 
     # Process teeth 
     for fdi_index in unique_fdi_indices:
@@ -217,6 +191,54 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path):
         print(f"  Saved FDI {fdi_index}: {len(class_points)} points, {len(class_faces)} faces")
         print(f"    STL: {stl_output_path}")
         print(f"    JSON: {json_output_path}")
+
+def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path):
+    """
+    Postprocess segmentation results: split by tooth, normalize, and save.
+    
+    Args:
+        stl_file: Path to original STL file
+        mask_file: Path to predicted segmentation mask (.npy)
+        output_dir: Output directory for processed teeth
+    """
+    
+    print(f"Postprocessing {stl_file.name}...")
+ 
+    # Load mesh and mask
+    mesh = trimesh.load(str(stl_file), process=False)
+    mesh.merge_vertices()
+    mask = np.load(mask_file)
+
+    if not is_consistent(mesh.vertices, mask): return
+ 
+    base_name = stl_file.stem
+    teeth_output_dir = output_dir / "teeth"
+    remeshed_teeth_output_dir = output_dir / "remeshed_teeth"
+    remeshed_output_dir = output_dir / "remeshed"
+    remeshed_scan_filename = output_dir / "remeshed" / Path(base_name).with_suffix(".stl")
+
+    teeth_output_dir.mkdir(parents=True, exist_ok=True)
+    remeshed_output_dir.mkdir(parents=True, exist_ok=True)
+    remeshed_teeth_output_dir.mkdir(parents=True, exist_ok=True)
+
+    points = np.array(mesh.vertices)
+    faces = np.array(mesh.faces)
+    cleaned_mask = clean_segmentation_mask(mask, points, faces) 
+    np.save(mask_file, cleaned_mask) # store cleaned segmentation mask
+    remeshed_scan = custom_remesh(stl_file)
+    save_remeshed(remeshed_scan, remeshed_scan_filename)
+    remeshed_scan_trimesh = trimesh.load_mesh(remeshed_scan_filename)
+    remeshed_mask = fit_segmask(cleaned_mask, points, remeshed_scan_trimesh.vertices)
+    np.save(remeshed_output_dir / Path(base_name).with_suffix(".npy"), remeshed_mask)
+    
+    points_remeshed = np.array(remeshed_scan_trimesh.vertices)
+    faces_remeshed = np.array(remeshed_scan_trimesh.faces)
+
+    try: create_segmentation_visualization(mesh, cleaned_mask, stl_file.stem, output_dir)
+    except Exception as e: print(f"  ⚠️  Visualization failed (continuing anyway): {e}")
+    # Get unique FDI indices from cleaned mask (excluding 0 which is gum)
+    dilate_and_save_teeth(cleaned_mask, points, faces, base_name, teeth_output_dir)
+    dilate_and_save_teeth(remeshed_mask.squeeze(), points_remeshed, faces_remeshed, base_name, remeshed_teeth_output_dir)
 
 def run_segmentation_with_model(cfg, model, data_folder: Path) -> bool:
     """

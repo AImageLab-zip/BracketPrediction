@@ -13,3 +13,4 @@ sympy==1.13.1
 tqdm==4.67.1
 trimesh==4.9.0
 meshlib
+faiss-cpu

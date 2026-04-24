@@ -1,8 +1,10 @@
 from functools import wraps
-from meshlib import mrmeshnumpy as mr
+
+import meshlib.mrmeshpy as mr
 import time
 import numpy as np
 from pathlib import Path
+import faiss
 
 def timed(func):
     @wraps(func)
@@ -38,8 +40,8 @@ def custom_remesh(path:Path,
     return mesh
 
 @timed
-def save_remeshed(mesh):
-        mr.saveMesh(mesh, "remeshed.stl")
+def save_remeshed(mesh, filepath:Path):
+    mr.saveMesh(mesh, filepath)
 
 def is_consistent(vertices:np.ndarray, mask:np.ndarray):
     if len(mask) != len(vertices):
@@ -58,3 +60,14 @@ def parse_tooth(tooth:str) -> list[str, str, int]:
     # Parse tooth_key: expected format "STEM_lower_0002_FDI_47"
     _, jaw, patient_id, _, fdi = tooth.split("_")
     return jaw, patient_id, int(fdi)
+
+@timed
+def fit_segmask(segmask:np.ndarray, source:np.ndarray, dest:np.ndarray):
+    d = 3
+    index = faiss.IndexFlatL2(d)
+    index.add(source)
+    _, indices = index.search(dest, 1)
+    remeshed_mask = segmask[indices]
+    assert remeshed_mask.shape[0] == dest.shape[0]
+    return remeshed_mask
+    #create_segmentation_visualization(remeshed, remeshed_mask.squeeze(), "reseshed_segmentation.png", Path(OUT_DIR))
