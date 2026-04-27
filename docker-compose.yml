@@ -10,7 +10,7 @@ services:
       - ./application/data:/workspace/application/data
       - ./application/data_debug:/workspace/application/data_debug
       - ./run_monitor_map_new.sh:/workspace/run_monitor_map_new.sh
-      - ./run_monitor_map_new.sh:/workspace/run_monitor_debug.sh
+      - ./run_monitor_debug.sh:/workspace/run_monitor_debug.sh
     environment:
       - PYTHONPATH=/workspace
       - DISPLAY=:99
