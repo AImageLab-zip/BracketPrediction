@@ -1,20 +1,9 @@
-from functools import wraps
-
 import meshlib.mrmeshpy as mr
-import time
 import numpy as np
 from pathlib import Path
 import faiss
+from timing import *
 
-def timed(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        start = time.perf_counter()
-        result = func(*args, **kwargs)
-        end = time.perf_counter()
-        print(f"{func.__name__} took {end - start:.6f} seconds")
-        return result
-    return wrapper
 
 @timed
 def custom_remesh(path:Path,
@@ -71,3 +60,11 @@ def fit_segmask(segmask:np.ndarray, source:np.ndarray, dest:np.ndarray):
     assert remeshed_mask.shape[0] == dest.shape[0]
     return remeshed_mask
     #create_segmentation_visualization(remeshed, remeshed_mask.squeeze(), "reseshed_segmentation.png", Path(OUT_DIR))
+
+def get_edges(faces:np.ndarray) -> np.ndarray:
+    edges = np.unique(np.sort(np.concatenate([
+        faces[:, [0, 1]],
+        faces[:, [1, 2]],
+        faces[:, [0, 2]],
+    ], axis=0), axis=1), axis=0)
+    return edges
