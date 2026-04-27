@@ -14,6 +14,9 @@ python application/segment_scan.py \
 """
 import os
 import trimesh
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
+
 MAPPING = {
     1: 48, 2: 47, 3: 46,
     4: 45, 5: 44, 6: 43,
@@ -85,9 +88,8 @@ def compute_dilation_masks(mask: np.ndarray, vertices: np.ndarray) -> dict[int, 
 
     return result
 
-def clean_segmentation_mask(mask, points, faces, min_fraction=0.4):
-    """Remove small noise labels by reassigning them to nearest neighbor labels."""
-    # Compute mean tooth size (in points) across all labeled teeth
+@timed
+def _remove_small_labels(mask:np.ndarray, points:np.ndarray, min_fraction:float=0.4) -> np.ndarray:
     tooth_labels = np.unique(mask[mask != 0])
     if len(tooth_labels) == 0:
         return mask
@@ -125,8 +127,68 @@ def clean_segmentation_mask(mask, points, faces, min_fraction=0.4):
         # Reassign to the label of nearest valid point
         new_labels = mask[nearest_valid_indices]
         new_mask[noisy_point_indices] = new_labels
-    
+ 
     return new_mask
+
+@timed
+def _keep_largest_components(mask: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    """
+    AI generated function.
+    For each tooth class, keep only the largest connected component (based on
+    mesh connectivity) and reassign all smaller components to gum (label 0).
+    Args:
+        mask:  (n_points,)  label per vertex (0 = gum, >0 = tooth class)
+        faces: (n_faces, 3) triangle indices into the vertex array
+    Returns:
+        Mask where each tooth label contains only its largest connected component.
+    """
+    # Build undirected edge list from triangles once
+    edges = get_edges(faces)
+    new_mask = mask.copy()
+
+    for tooth_label in np.unique(mask[mask != 0]):
+        tooth_indices = np.where(new_mask == tooth_label)[0]
+        if len(tooth_indices) == 0:
+            continue
+
+        # Keep only edges internal to this tooth
+        tooth_set = np.zeros(len(new_mask), dtype=bool)
+        tooth_set[tooth_indices] = True
+        tooth_edges = edges[tooth_set[edges[:, 0]] & tooth_set[edges[:, 1]]]
+        if len(tooth_edges) == 0:
+            continue
+
+        # Re-index to compact range [0, n_tooth_points)
+        local_idx = np.full(len(new_mask), -1, dtype=int)
+        local_idx[tooth_indices] = np.arange(len(tooth_indices))
+        local_edges = local_idx[tooth_edges]  # (n_edges, 2)
+
+        n = len(tooth_indices)
+        graph = csr_matrix(
+            (np.ones(len(local_edges)), (local_edges[:, 0], local_edges[:, 1])),
+            shape=(n, n)
+        )
+
+        n_components, component_ids = connected_components(graph, directed=False)
+
+        if n_components == 1:
+            continue
+
+        largest = np.bincount(component_ids).argmax()
+        new_mask[tooth_indices[component_ids != largest]] = 0
+
+    return new_mask
+   
+
+def clean_segmentation_mask(mask:np.ndarray, points:np.ndarray, faces:np.ndarray, min_fraction=0.4) -> np.ndarray:
+    """
+    1) Remove small noise labels by reassigning them to nearest neighbor labels.
+    2) Applies CCL and keeps only the largest connected component for each tooth.
+    """
+    # Compute mean tooth size (in points) across all labeled teeth
+    mask = _remove_small_labels(mask, points, min_fraction)
+    mask = _keep_largest_components(mask, faces)
+    return mask
 
 def dilate_and_save_teeth(mask:np.ndarray, 
                           points:np.ndarray, 
@@ -205,15 +267,17 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path):
     print(f"Postprocessing {stl_file.name}...")
  
     # Load mesh and mask
-    mesh = trimesh.load(str(stl_file), process=False)
+    mesh = trimesh.load_mesh(str(stl_file), process=False)
     mesh.merge_vertices()
     mask = np.load(mask_file)
 
     if not is_consistent(mesh.vertices, mask): return
  
     base_name = stl_file.stem
+    # Single teeth
     teeth_output_dir = output_dir / "teeth"
     remeshed_teeth_output_dir = output_dir / "remeshed_teeth"
+    # Full scans 
     remeshed_output_dir = output_dir / "remeshed"
     remeshed_scan_filename = output_dir / "remeshed" / Path(base_name).with_suffix(".stl")
 
@@ -225,9 +289,9 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path):
     faces = np.array(mesh.faces)
     cleaned_mask = clean_segmentation_mask(mask, points, faces) 
     np.save(mask_file, cleaned_mask) # store cleaned segmentation mask
-    remeshed_scan = custom_remesh(stl_file)
+    remeshed_scan = custom_remesh(stl_file) # run custom remeshing on full scan
     save_remeshed(remeshed_scan, remeshed_scan_filename)
-    remeshed_scan_trimesh = trimesh.load_mesh(remeshed_scan_filename)
+    remeshed_scan_trimesh = trimesh.load_mesh(remeshed_scan_filename) # re-load using trimesh (fast)
     remeshed_mask = fit_segmask(cleaned_mask, points, remeshed_scan_trimesh.vertices)
     np.save(remeshed_output_dir / Path(base_name).with_suffix(".npy"), remeshed_mask)
     
