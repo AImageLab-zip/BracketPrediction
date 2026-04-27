@@ -3,6 +3,7 @@ import numpy as np
 from pathlib import Path
 import faiss
 from timing import *
+import json
 
 
 @timed
@@ -68,3 +69,20 @@ def get_edges(faces:np.ndarray) -> np.ndarray:
         faces[:, [0, 2]],
     ], axis=0), axis=1), axis=0)
     return edges
+
+
+def load_json(path: Path) -> dict:
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"⚠️  Could not read {path}: {e}")
+        return {}
+
+
+def save_json(path: Path, data: dict):
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"⚠️  Could not save {path}: {e}")

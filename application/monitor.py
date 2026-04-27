@@ -23,25 +23,27 @@ os.environ["VTK_OPENGL_HAS_EGL"] = "0"
 import json
 import time
 import argparse
+import traceback
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Set, List
-from preprocessor import Preprocessor
+
 import debugpy
 import requests
 import torch
+
 from pointcept.engines.defaults import default_config_parser, default_setup
-from segment_scan import run_segmentation_with_model
 from pointcept.models import build_model
-import traceback
+from preprocessor import Preprocessor
+from segment_scan import run_segmentation_with_model
 from bond import postprocess_predictions, run_bond_with_model
 from visualizers import plot_jaw
 from utils import *
 
-PENDING = 0
+# Job status codes — kept in sync with the remote API
+PENDING    = 0
 PROCESSING = 1
-COMPLETED = 2
-FAILED = 3
+COMPLETED  = 2
+FAILED     = 3
 
 class ScanMonitor:
     def __init__(
@@ -54,428 +56,305 @@ class ScanMonitor:
         check_interval: int = 10,
         status_file: str = "processing_status.json",
     ):
-        self.data_root = Path(data_root)
-        self.seg_config = Path(seg_config)
-        self.seg_weight = Path(seg_weight)
-        self.bond_config = Path(bond_config)
-        self.bond_weight = Path(bond_weight)
+        self.data_root      = Path(data_root)
         self.check_interval = check_interval
-        self.status_file = self.data_root / status_file  # Status file inside data_root
-        self.prep = Preprocessor()
+        self.status_file    = self.data_root / status_file
+        self.prep           = Preprocessor()
 
-        # Validate paths
-        if not self.data_root.exists():
-            raise ValueError(f"Data root does not exist: {self.data_root}")
-        if not self.seg_config.exists():
-            raise ValueError(f"Segmentation config does not exist: {self.seg_config}")
-        if not self.seg_weight.exists():
-            raise ValueError(f"Segmentation weight does not exist: {self.seg_weight}")
-        if not self.bond_config.exists():
-            raise ValueError(f"Bond config does not exist: {self.bond_config}")
-        if not self.bond_weight.exists():
-            raise ValueError(f"Bond weight does not exist: {self.bond_weight}")
-        
-        # Load models into memory
-        self.seg_model = None
-        self.seg_cfg = None
-        self.bond_model = None
-        self.bond_cfg = None
-        self._load_models()
-        
-        self.status = self.load_status()
-        print(f"✅ Monitor initialized")
-        print(f"   Data root: {self.data_root}")
+        # Validate required paths
+        for label, p in [
+            ("Data root",            Path(data_root)),
+            ("Segmentation config",  Path(seg_config)),
+            ("Segmentation weights", Path(seg_weight)),
+            ("Bond config",          Path(bond_config)),
+            ("Bond weights",         Path(bond_weight)),
+        ]:
+            if not p.exists():
+                raise ValueError(f"{label} does not exist: {p}")
+
+        # Load both models once at startup
+        print("\n🔄 Loading models onto GPU …")
+        self.seg_cfg,  self.seg_model  = self._load_model(seg_config,  seg_weight)
+        self.bond_cfg, self.bond_model = self._load_model(bond_config, bond_weight)
+        print("✅ Both models ready.\n")
+
+        print(f"✅ Monitor initialised")
+        print(f"   Data root     : {self.data_root}")
         print(f"   Check interval: {self.check_interval}s")
-        print(f"   Status file: {self.status_file}")
-    
-    def _load_model(self, config:Path, saved_checkpoint:Path):
-        cfg = default_setup(default_config_parser(str(config), {}))
+        print(f"   Status file   : {self.status_file}")
+
+    # ------------------------------------------------------------------
+    # Model loading
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_model(config: Path, weights: Path):
+        cfg   = default_setup(default_config_parser(str(config), {}))
         model = build_model(cfg.model)
-        checkpoint = torch.load(str(saved_checkpoint), weights_only=False)
-        model.load_state_dict(checkpoint.get("state_dict", checkpoint))
-        model = model.cuda()
-        model.eval()
-        print("   ✅ Model Loaded")
+        ckpt  = torch.load(str(weights), weights_only=False)
+        model.load_state_dict(ckpt.get("state_dict", ckpt))
+        model = model.cuda().eval()
+        print("   ✅ Model loaded")
         return cfg, model
 
-    def _load_models(self):
-        """Load both segmentation and bond prediction models into GPU."""
-        print("\n🔄 Loading models on GPU...")
-        try:
-            # Load segmentation and landmark models
-            self.seg_cfg, self.seg_model = self._load_model(self.seg_config, self.seg_weight)
-            self.bond_cfg, self.bond_model = self._load_model(self.bond_config, self.bond_weight)
-        except Exception as e:
-            print(f"   ❌ Error loading models: {e}")
-            raise
-    
     def __del__(self):
-        """Clean up models on shutdown."""
         try:
-            if self.seg_model is not None:
-                del self.seg_model
-            if self.bond_model is not None:
-                del self.bond_model
+            del self.seg_model, self.bond_model
             torch.cuda.empty_cache()
-        except:
+        except Exception:
             pass
-    
-    def load_status(self) -> Dict:
-        """
-        Load processing status from JSON file.
-        This function is called at the beginning of each
-        iteration in the main processing loop, so that
-        any manual edits of the file will be detected.
-        """
-        if self.status_file.exists():
-            try:
-                with open(self.status_file, 'r') as f:
-                    return json.load(f)
-            except Exception as e:
-                print(f"⚠️  Error loading status file: {e}")
-                # fallback to old status if a missedit happens (manual for exaxmple)
-                if self.status: return self.status
-        return {}
 
-    def update_status(self, job_id: str, status: int, message: str="placeholder"):
-        """Update status on remote API. Returns True if successful, False otherwise."""
+    def load_status(self) -> dict:
+        return load_json(self.status_file)
+
+    def save_status(self, status: dict):
+        save_json(self.status_file, status)
+
+    def notify_api(self, job_id: str, status: int, message: str = "") -> bool:
         try:
-            url = f"https://autobonding.ing.unimore.it/api/update/{job_id}/"
-            print("Calling:", url)
-            payload = {
-                "status": status,
-                "logs": message
-            }
+            url     = f"https://autobonding.ing.unimore.it/api/update/{job_id}/"
             headers = {
                 "Authorization": f"Bearer {os.getenv('API_TOKEN')}",
-                "Content-Type": "application/json"
+                "Content-Type":  "application/json",
             }
-            response = requests.post(
-                url,
-                json=payload,
-                headers=headers,
-                timeout=5
-            )
-            response.raise_for_status()
-            print(f"   ✅ Status updated on API: {status}")
+            resp = requests.post(url, json={"status": status, "logs": message},
+                                 headers=headers, timeout=5)
+            resp.raise_for_status()
+            print(f"   ✅ API notified: status={status}")
             return True
         except requests.exceptions.RequestException as e:
-            print(f"   ⚠️  Failed to update status on API: {e}")
+            print(f"   ⚠️  API notification failed: {e}")
             return False
 
-    def save_status(self):
-        """Save processing status to JSON file."""
-        try:
-            with open(self.status_file, 'w') as f:
-                json.dump(self.status, f, indent=4)
-        except Exception as e:
-            print(f"⚠️  Error saving status file: {e}")
-    
-    def find_patient_directories(self) -> Set[str]:
-        """Find all patient directories that contain a 'raw_data' subdirectory or STL files."""
-        patient_dirs = set()
-        for item in self.data_root.iterdir():
-            if not item.is_dir(): continue
-            has_raw_data = (item / "raw_data").is_dir()
-            has_stl_files = any(item.glob("*.stl"))
-            if has_raw_data or has_stl_files: patient_dirs.add(item.name)
-        return patient_dirs
-    
-    def get_stl_files(self, patient_dir: Path) -> List[str]:
-        """Get list of STL files in patient directory."""
-        stl_files = list(patient_dir.glob("*.stl"))
-        return sorted([f.name for f in stl_files])
-    
-    def get_unprocessed_files(self, patient_id: str, patient_dir: Path) -> List[str]:
-        """Get list of STL files that haven't been processed yet."""
-        current_files = set(self.get_stl_files(patient_dir))
-        if patient_id not in self.status: return list(current_files)
-        processed_files = set(self.status[patient_id].get("processed_files", []))
-        failed_files = set(self.status[patient_id].get("failed_files", []))
-        # Return files that are neither processed nor failed
-        unprocessed = current_files - processed_files - failed_files
-        return sorted(list(unprocessed))
-    
-    def get_scan_info(self, files: List[str]) -> Dict:
-        """Get information about scan files."""
-        has_lower = any("lower" in f.lower() for f in files)
-        has_upper = any("upper" in f.lower() for f in files)
-        return {
-            "num_files": len(files),
-            "has_lower": has_lower,
-            "has_upper": has_upper,
-            "files": files
-        }
-    
+    def find_pending_patients(self) -> list[Path]:
+        """Return patient dirs that have work to do."""
+        pending = []
+        for item in sorted(self.data_root.iterdir()):
+            if not item.is_dir():
+                continue
+            has_raw  = (item / "raw_data").is_dir()
+            has_stls = any(item.glob("*.stl"))
+            if has_raw or has_stls:
+                pending.append(item)
+        return pending
+
     def has_new_raw_files(self, patient_dir: Path) -> bool:
-        """Check if there are new, unprocessed files in the raw_data directory."""
-        raw_data_dir = patient_dir / "raw_data"
-        if not raw_data_dir.is_dir(): return False
-        # Case-insensitive glob for STL files
-        raw_stls = list(raw_data_dir.glob('[sS][tT][eE][mM]_*.[sS][tT][lL]'))
-        for raw_stl in raw_stls:
-            # If the processed file doesn't exist in the parent directory, it's new.
-            if not (patient_dir / raw_stl.name).exists(): return True
+        raw_dir = patient_dir / "raw_data"
+        if not raw_dir.is_dir():
+            return False
+        for raw_stl in raw_dir.glob("[sS][tT][eE][mM]_*.[sS][tT][lL]"):
+            if not (patient_dir / raw_stl.name).exists():
+                return True
         return False
 
-    def should_process(self, patient_id: str, patient_dir: Path) -> bool:
-        """Check if patient directory has new raw files or unprocessed processed files."""
-        # Don't process if already being processed (prevent duplicate job processing)
-        if patient_id in self.status:
-            processing_history = self.status[patient_id].get("processing_history", [])
-            if processing_history:
-                last_entry = processing_history[-1]
-                # If the last entry is marked as "processing", skip to avoid duplicates
-                if last_entry.get("status") == "processing":
-                    if "completed_at" not in last_entry and "failed_at" not in last_entry:
-                        print(f"  ⏳ Skipping {patient_id}: already being processed")
-                        return False
-        
-        # Check 1: Are there new raw files to preprocess?
-        if self.has_new_raw_files(patient_dir): return True
-        # Check 2: Are there processed files waiting for segmentation/bonding?
-        unprocessed_for_pipeline = self.get_unprocessed_files(patient_id, patient_dir)
-        return len(unprocessed_for_pipeline) > 0
+    def unprocessed_stls(self, patient_dir: Path, patient_status: dict) -> list[str]:
+        """STL files in patient_dir not yet marked processed or failed."""
+        all_stls      = {f.name for f in sorted(patient_dir.glob("*.stl"))}
+        done          = set(patient_status.get("processed_files", []))
+        failed        = set(patient_status.get("failed_files", []))
+        return sorted(all_stls - done - failed)
 
-    @timed 
-    def run_segmentation(self, patient_id: str, patient_dir: Path) -> tuple[bool, str]:
-        """Run segmentation using cached model for patient directory."""
-        print(f"\n{'='*80}")
-        print(f"🦷 Running SEGMENTATION for patient {patient_id}")
-        print(f"{'='*80}")
+    def is_already_running(self, patient_status: dict) -> bool:
+        history = patient_status.get("processing_history", [])
+        if not history:
+            return False
+        last = history[-1]
+        return (last.get("status") == "processing"
+                and "completed_at" not in last
+                and "failed_at"    not in last)
 
+    def needs_processing(self, patient_dir: Path, patient_status: dict) -> bool:
+        if self.is_already_running(patient_status):
+            print(f"  ⏳ {patient_dir.name}: already running, skipping")
+            return False
+        if self.has_new_raw_files(patient_dir):
+            return True
+        return len(self.unprocessed_stls(patient_dir, patient_status)) > 0
+
+    # ------------------------------------------------------------------
+    # Pipeline stages
+    # ------------------------------------------------------------------
+
+    @timed
+    def run_segmentation(self, patient_dir: Path) -> tuple[bool, str]:
+        print(f"\n{'='*70}\n🦷 SEGMENTATION — {patient_dir.name}\n{'='*70}")
         try:
- 
-            success = run_segmentation_with_model(
-                cfg=self.seg_cfg,
-                model=self.seg_model,
-                data_folder=patient_dir,
+            ok = run_segmentation_with_model(
+                cfg=self.seg_cfg, model=self.seg_model, data_folder=patient_dir
             )
- 
-            if success:
-                message = f"✅ Segmentation completed for {patient_id}"
-                print(message)
-                return True, message
-            else:
-                return False, "Segmentation processing failed"
- 
+            msg = f"Segmentation {'completed' if ok else 'failed'} for {patient_dir.name}"
+            return ok, msg
         except Exception as e:
-            print(f"❌ Segmentation failed for {patient_id}")
-            print(f"   Error: {e}")
             traceback.print_exc()
             return False, str(e)
 
     @timed
-    def run_bond_prediction(self, patient_id: str, patient_dir: Path) -> tuple[bool, str]:
-        """Run bond prediction using cached model for patient directory."""
-        print(f"\n{'='*80}")
-        print(f"📍 Running BOND PREDICTION for patient {patient_id}")
-        print(f"{'='*80}")
- 
+    def run_bond_prediction(self, patient_dir: Path) -> tuple[bool, str]:
+        print(f"\n{'='*70}\n📍 BOND PREDICTION — {patient_dir.name}\n{'='*70}")
         try:
-            
-            success = run_bond_with_model(
-                cfg=self.bond_cfg,
-                model=self.bond_model,
-                data_folder=patient_dir,
+            ok = run_bond_with_model(
+                cfg=self.bond_cfg, model=self.bond_model, data_folder=patient_dir
             )
- 
-            if success:
-                message = f"✅ Bond prediction completed for {patient_id}"
-                print(message)
-                return True, message
-            else:
-                return False, "Bond prediction processing failed"
-        
+            msg = f"Bond prediction {'completed' if ok else 'failed'} for {patient_dir.name}"
+            return ok, msg
         except Exception as e:
-            print(f"❌ Bond prediction failed for {patient_id}")
-            print(f"   Error: {e}")
             traceback.print_exc()
             return False, str(e)
- 
-    def process_patient(self, patient_id: str, patient_dir: Path):
-        """Process a patient through the full pipeline: pre-processing, segmentation, bonding."""
-        timestamp = datetime.now().isoformat()
- 
-        # Initialize patient status if not exists
-        if patient_id not in self.status:
-            self.status[patient_id] = {
-                "processed_files": [],
-                "failed_files": [],
-                "processing_history": []
-            }
-        
-        # --- Stage 1: Pre-processing from raw_data ---
-        raw_data_dir = patient_dir / "raw_data"
-        if raw_data_dir.is_dir():
-            # Case-insensitive glob for STL files
-            preprocess_success, raw_files_handled = self.prep.preprocess_raw_scans(patient_id, patient_dir) 
-            if not preprocess_success:
+
+    def make_plots(self, patient_dir: Path):
+        """Generate all visualisations. Runs after the API has been notified."""
+        try:
+            postprocess_predictions(patient_dir, visualize=True)
+            print("✅ Per-tooth visualisations done")
+        except Exception as e:
+            print(f"⚠️  Per-tooth visualisation failed: {e}")
+
+        try:
+            plot_jaw(patient_dir, raw_scan=True)
+            print("✅ Jaw visualisation done")
+        except Exception as e:
+            print(f"⚠️  Jaw visualisation failed: {e}")
+
+    # ------------------------------------------------------------------
+    # Main patient processor
+    # ------------------------------------------------------------------
+
+    def process_patient(self, patient_dir: Path, status: dict):
+        patient_id = patient_dir.name
+
+        # Ensure the patient has a status entry
+        patient_status = status.setdefault(patient_id, {
+            "processed_files": [],
+            "failed_files":    [],
+            "processing_history": [],
+        })
+
+        # ── Stage 1: pre-process raw scans if needed ──────────────────
+        if self.has_new_raw_files(patient_dir):
+            ok, handled = self.prep.preprocess_raw_scans(patient_id, patient_dir)
+            if not ok:
+                patient_status["processing_history"].append({
+                    "started_at":  datetime.now().isoformat(),
+                    "status":      "failed",
+                    "failed_at":   datetime.now().isoformat(),
+                    "error":       "Pre-processing raw scans failed",
+                    "files":       handled,
+                })
+                patient_status["failed_files"] = list(
+                    set(patient_status["failed_files"]) | set(handled)
+                )
+                self.save_status(status)
                 print(f"❌ Pre-processing failed for {patient_id}. Aborting.")
-                processing_entry = {
-                    "started_at": timestamp,
-                    "files_to_process": raw_files_handled,
-                    "status": "failed",
-                    "failed_at": datetime.now().isoformat(),
-                    "error": "Pre-processing raw scans failed"
-                }
-                self.status[patient_id]["processing_history"].append(processing_entry)
-                self.status[patient_id]["failed_files"].extend(raw_files_handled)
-                self.status[patient_id]["failed_files"] = list(set(self.status[patient_id]["failed_files"]))
-                self.save_status()
                 return
 
-        # --- Stage 2: Segmentation and Bond Prediction ---
-        # Get unprocessed files (e.g., upper.stl, lower.stl that were just created)
-        unprocessed_files = self.get_unprocessed_files(patient_id, patient_dir)
- 
-        if not unprocessed_files:
-            print(f"  No new files for segmentation/bonding for {patient_id}")
+        # ── Stage 2: pick up unprocessed STL files ────────────────────
+        todo = self.unprocessed_stls(patient_dir, patient_status)
+        if not todo:
+            print(f"  ℹ️  Nothing new to process for {patient_id}")
             return
- 
-        scan_info = self.get_scan_info(unprocessed_files)
- 
-        # Add processing entry to history
-        processing_entry = {
-            "started_at": timestamp,
-            "files_to_process": unprocessed_files,
-            "num_files": scan_info["num_files"],
-            "has_lower": scan_info["has_lower"],
-            "has_upper": scan_info["has_upper"],
-            "status": "processing"  # Mark as processing immediately
+
+        print(f"\n{'#'*70}")
+        print(f"# Patient : {patient_id}")
+        print(f"# Files   : {todo}")
+        print(f"{'#'*70}")
+
+        # Record start
+        entry = {
+            "started_at": datetime.now().isoformat(),
+            "files":      todo,
+            "status":     "processing",
         }
-        self.status[patient_id]["processing_history"].append(processing_entry)
-        self.save_status()
- 
-        print(f"\n{'#'*80}")
-        print(f"# Processing Patient: {patient_id}")
-        print(f"# Started at: {timestamp}")
-        print(f"# New files to process: {unprocessed_files}")
-        print(f"{'#'*80}")
-        
-        # Run segmentation
-        seg_success, message = self.run_segmentation(patient_id, patient_dir)
-        
-        if not seg_success:
-            self.update_status(patient_dir.name, FAILED, message)
-            processing_entry["status"] = "failed"
-            processing_entry["failed_at"] = datetime.now().isoformat()
-            processing_entry["error"] = "Segmentation failed"
-            # Update the last entry instead of appending (we already added it at start)
-            self.status[patient_id]["processing_history"][-1] = processing_entry
-            # Mark files as failed
-            self.status[patient_id]["failed_files"].extend(unprocessed_files)
-            self.status[patient_id]["failed_files"] = list(set(self.status[patient_id]["failed_files"]))
-            self.save_status()
+        patient_status["processing_history"].append(entry)
+        self.save_status(status)
+
+        def fail(reason: str, message: str):
+            self.notify_api(patient_id, FAILED, message)
+            entry.update({"status": "failed", "failed_at": datetime.now().isoformat(), "error": reason})
+            patient_status["failed_files"] = list(set(patient_status["failed_files"]) | set(todo))
+            self.save_status(status)
+
+        # ── Segmentation ──────────────────────────────────────────────
+        ok, msg = self.run_segmentation(patient_dir)
+        if not ok:
+            fail("Segmentation failed", msg)
             return
-        
-        # Run bond prediction
-        bond_success, message = self.run_bond_prediction(patient_id, patient_dir)
-        
-        if not bond_success:
-            self.update_status(patient_dir.name, FAILED, message)
-            processing_entry["status"] = "failed"
-            processing_entry["failed_at"] = datetime.now().isoformat()
-            processing_entry["error"] = "Bond prediction failed"
-            # Update the last entry instead of appending (we already added it at start)
-            self.status[patient_id]["processing_history"][-1] = processing_entry
-            # Mark files as failed
-            self.status[patient_id]["failed_files"].extend(unprocessed_files)
-            self.status[patient_id]["failed_files"] = list(set(self.status[patient_id]["failed_files"]))
-            self.save_status()
+
+        # ── Bond prediction ───────────────────────────────────────────
+        ok, msg = self.run_bond_prediction(patient_dir)
+        if not ok:
+            fail("Bond prediction failed", msg)
             return
- 
-        # First: save rotated projected points (no visuals)
+
         try:
             postprocess_predictions(patient_dir, visualize=False)
-            print("✅ Rotated points saved")
+            print("✅ Results saved")
         except Exception as e:
-            print(f"⚠️ Failed to save rotated points: {e}")
+            fail("Post-processing failed", str(e))
+            return
 
-        # THEN notify the server that processing finished
-        self.update_status(patient_dir.name, COMPLETED, "Processing completed!")
+        self.notify_api(patient_id, COMPLETED, "Processing completed!")
+        self.make_plots(patient_dir)
+        entry.update({"status": "completed", "completed_at": datetime.now().isoformat()})
+        patient_status["processed_files"] = list(set(patient_status["processed_files"]) | set(todo))
+        self.save_status(status)
 
-        # NOW generate visualizations (single-tooth + jaw)
-        try:
-            # generate single-tooth visualizations (this will also re-run postprocessing with visuals)
-            postprocess_predictions(patient_dir, visualize=True)
-        except Exception as e:
-            print(f"⚠️ Post-processing/teeth visualization failed: {e}")
+        print(f"\n{'='*70}")
+        print(f"✅ DONE — {patient_id}  |  files: {todo}")
+        print(f"{'='*70}\n")
 
-        try:
-            #plot_jaw(patient_dir, raw_scan=False)
-            plot_jaw(patient_dir, raw_scan=True)
-            print(f"✅ Visualizations complete")
-        except Exception as e:
-            print(f"⚠️ Jaw visualization failed: {e}")
-        
-        processing_entry["status"] = "completed"
-        processing_entry["completed_at"] = datetime.now().isoformat()
-        # Update the last entry instead of appending (we already added it at start)
-        self.status[patient_id]["processing_history"][-1] = processing_entry
-        self.status[patient_id]["processed_files"].extend(unprocessed_files)
-        self.status[patient_id]["processed_files"] = list(set(self.status[patient_id]["processed_files"]))
-        self.save_status()
-        
-        print(f"\n{'='*80}")
-        print(f"✅ PIPELINE COMPLETED for patient {patient_id}")
-        print(f"   Processed files: {unprocessed_files}")
-        print(f"   Total processed files: {len(self.status[patient_id]['processed_files'])}")
-        print(f"{'='*80}\n")
- 
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
+
     def run(self):
-        """Main monitoring loop."""
-        print(f"\n{'='*80}")
-        print(f"🔍 Starting Dental Scan Monitor")
-        print(f"{'='*80}\n") 
-        iteration = 0 
+        print(f"\n{'='*70}")
+        print("🔍 Dental Scan Monitor — running")
+        print(f"{'='*70}\n")
+
         try:
             while True:
-                iteration += 1
-                # Find all patient directories
-                self.status = self.load_status()
-                patient_dirs = self.find_patient_directories() 
-                # Process new/unprocessed files
-                for patient_id in sorted(patient_dirs):
-                    patient_dir = self.data_root / patient_id 
-                    if self.should_process(patient_id, patient_dir):
-                        print(f"  Processing {patient_id}: Found new files or tasks.")
-                        self.update_status(patient_dir.name, PROCESSING, "Processing")
-                        self.process_patient(patient_id, patient_dir)
+                # Re-read status each iteration (picks up manual edits)
+                status = self.load_status()
+
+                for patient_dir in self.find_pending_patients():
+                    patient_status = status.get(patient_dir.name, {})
+                    if not self.needs_processing(patient_dir, patient_status):
+                        continue
+
+                    print(f"  ▶ {patient_dir.name}: new work found")
+                    self.notify_api(patient_dir.name, PROCESSING, "Processing")
+                    self.process_patient(patient_dir, status)
 
                 time.sleep(self.check_interval)
-                
-        except KeyboardInterrupt:
-            total_processed = sum(len(v.get("processed_files", [])) for v in self.status.values())
-            total_failed = sum(len(v.get("failed_files", [])) for v in self.status.values())
-            print("\n\n⚠️  Monitor stopped by user")
-            print(f"Total processed files: {total_processed}")
-            print(f"Total failed files: {total_failed}")
-            print(f"Patients tracked: {len(self.status)}")
-        except Exception as e:
-            print(f"\n\n❌ Monitor error: {e}")
-            raise
 
+        except KeyboardInterrupt:
+            n_ok   = sum(len(v.get("processed_files", [])) for v in status.values())
+            n_fail = sum(len(v.get("failed_files",    [])) for v in status.values())
+            print(f"\n⚠️  Stopped by user  |  processed={n_ok}  failed={n_fail}  patients={len(status)}")
+        except Exception as e:
+            print(f"\n❌ Monitor crashed: {e}")
+            raise
 
 def main():
     parser = argparse.ArgumentParser(
         description="Monitor and automatically process dental scan directories"
     )
-    parser.add_argument("--data-root", type=str, required=True, help="Root directory containing patient folders")
-    parser.add_argument("--seg-config",type=str, required=True, help="Path to segmentation config file")
-    parser.add_argument("--seg-weight",type=str, required=True,help="Path to segmentation model weights")
-    parser.add_argument("--bond-config",type=str,required=True,help="Path to bond prediction config file")
-    parser.add_argument("--bond-weight",type=str,required=True,help="Path to bond prediction model weights")
-    parser.add_argument("--check-interval",type=int,default=10,help="Interval in seconds between checks (default: 3)")
-    parser.add_argument("--status-file",type=str,default="processing_status.json",help="Name of status file (default: processing_status.json)")
-    parser.add_argument("--debug", action="store_true", help="Wait for debugger to attach")
+    parser.add_argument("--data-root",      required=True, help="Root directory with patient folders")
+    parser.add_argument("--seg-config",     required=True, help="Segmentation config file")
+    parser.add_argument("--seg-weight",     required=True, help="Segmentation model weights")
+    parser.add_argument("--bond-config",    required=True, help="Bond prediction config file")
+    parser.add_argument("--bond-weight",    required=True, help="Bond prediction model weights")
+    parser.add_argument("--check-interval", type=int, default=10, help="Seconds between scans (default: 10)")
+    parser.add_argument("--status-file",    default="processing_status.json", help="Status filename")
+    parser.add_argument("--debug",          action="store_true", help="Wait for debugger on port 5681")
     args = parser.parse_args()
+
     if args.debug:
-        print("Hello, happy debugging.")
         debugpy.listen(("0.0.0.0", 5681))
-        print(">>> Debugger is listening on port 5681. Waiting for client to attach...")
+        print(">>> Waiting for debugger on port 5681 …")
         debugpy.wait_for_client()
-        print(">>> Debugger attached. Resuming execution.")
+        print(">>> Debugger attached.")
+
     monitor = ScanMonitor(
         data_root=args.data_root,
         seg_config=args.seg_config,
@@ -484,8 +363,9 @@ def main():
         bond_weight=args.bond_weight,
         check_interval=args.check_interval,
         status_file=args.status_file,
-    ) 
+    )
     monitor.run()
+
 
 if __name__ == "__main__":
     main()
