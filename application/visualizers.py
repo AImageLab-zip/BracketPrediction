@@ -7,6 +7,21 @@ import numpy as np
 import pyvista as pv
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import Patch
+from plyfile import PlyData, PlyElement
+
+# simple color map per landmark type
+COLORS = {
+    "bracket":  [255, 0, 0],
+    "incisal":  [0, 255, 0],
+    "outer":    [0, 0, 255],
+    "gingival": [255, 255, 0],
+    "mesial":   [255, 0, 255],
+    "distal":   [0, 255, 255],
+    "inner":    [128, 128, 255],
+    "facial":   [255, 128, 0],
+    "cusps":    [128, 255, 128],
+    "planar":   [200, 200, 200],
+}
 
 AUTOBONDING_MAPPING = {
     48: 1, 47: 2, 46: 3,
@@ -422,3 +437,29 @@ def create_segmentation_visualization(mesh:trimesh.Trimesh,
     plt.close()
 
     print(f"  Saved visualization: {vis_output_path}")
+
+
+def json_to_ply(json_path, output_ply):
+    with open(json_path) as f:
+        data = json.load(f)
+    vertices = []
+    for tooth in data.values():
+        for key, value in tooth.items():
+
+            if key == "basePlane":
+                continue  # skip axes
+
+            if isinstance(value[0], list):  # list of points (cusps, planar)
+                for pt in value:
+                    color = COLORS.get(key, [255, 255, 255])
+                    vertices.append((*pt, *color))
+            else:  # single point
+                color = COLORS.get(key, [255, 255, 255])
+                vertices.append((*value, *color))
+    vertices = np.array(
+        vertices,
+        dtype=[("x", "f4"), ("y", "f4"), ("z", "f4"),
+               ("red", "u1"), ("green", "u1"), ("blue", "u1")]
+    )
+    ply = PlyData([PlyElement.describe(vertices, "vertex")])
+    ply.write(output_ply)

@@ -11,9 +11,11 @@ exp
 weights
 data
 logs
+application/__pycache__
 application/data
 application/data_debug
 application/app_weights
+application/app_data
 outputs/
 data/
 submit_all_train_jobs.sh

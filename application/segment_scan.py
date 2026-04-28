@@ -326,7 +326,7 @@ def run_segmentation_with_model(cfg, model, data_folder: Path) -> bool:
         
         # Set up configuration
         cfg = default_setup(cfg)
-        
+ 
         # Build and run tester with cached model
         test_cfg = dict(cfg=cfg, model=model, **cfg.test)
         tester = TESTERS.build(test_cfg)
