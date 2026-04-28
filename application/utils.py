@@ -4,6 +4,9 @@ from pathlib import Path
 import faiss
 from timing import *
 import json
+from pointcept.models import build_model
+from pointcept.engines.defaults import default_config_parser, default_setup
+import torch
 
 
 @timed
@@ -86,3 +89,12 @@ def save_json(path: Path, data: dict):
             json.dump(data, f, indent=4)
     except Exception as e:
         print(f"⚠️  Could not save {path}: {e}")
+
+def load_model(config: Path, weights: Path):
+    cfg   = default_setup(default_config_parser(str(config), {}))
+    model = build_model(cfg.model)
+    ckpt  = torch.load(str(weights), weights_only=False)
+    model.load_state_dict(ckpt.get("state_dict", ckpt))
+    model = model.cuda().eval()
+    print("   ✅ Model loaded")
+    return cfg, model

@@ -31,8 +31,6 @@ import debugpy
 import requests
 import torch
 
-from pointcept.engines.defaults import default_config_parser, default_setup
-from pointcept.models import build_model
 from preprocessor import Preprocessor
 from segment_scan import run_segmentation_with_model
 from bond import postprocess_predictions, run_bond_with_model
@@ -74,8 +72,8 @@ class ScanMonitor:
 
         # Load both models once at startup
         print("\n🔄 Loading models onto GPU …")
-        self.seg_cfg,  self.seg_model  = self._load_model(seg_config,  seg_weight)
-        self.bond_cfg, self.bond_model = self._load_model(bond_config, bond_weight)
+        self.seg_cfg,  self.seg_model  = self.load_model(seg_config,  seg_weight)
+        self.bond_cfg, self.bond_model = self.load_model(bond_config, bond_weight)
         print("✅ Both models ready.\n")
 
         print(f"✅ Monitor initialised")
@@ -86,17 +84,6 @@ class ScanMonitor:
     # ------------------------------------------------------------------
     # Model loading
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _load_model(config: Path, weights: Path):
-        cfg   = default_setup(default_config_parser(str(config), {}))
-        model = build_model(cfg.model)
-        ckpt  = torch.load(str(weights), weights_only=False)
-        model.load_state_dict(ckpt.get("state_dict", ckpt))
-        model = model.cuda().eval()
-        print("   ✅ Model loaded")
-        return cfg, model
-
     def __del__(self):
         try:
             del self.seg_model, self.bond_model

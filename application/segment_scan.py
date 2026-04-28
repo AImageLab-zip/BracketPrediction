@@ -26,7 +26,7 @@ MAPPING = {
     16: 38
 }
 import debugpy
-from visualizers import create_segmentation_visualization
+from application.visualizers import create_segmentation_visualization
 from pointcept.engines.defaults import (
     default_argument_parser,
     default_config_parser,
@@ -38,7 +38,7 @@ from pointcept.engines.launch import launch
 import numpy as np
 import json
 from scipy.spatial import cKDTree
-from utils import *
+from application.utils import *
 
 
 def normalize(points: np.ndarray, flip:bool=False) -> tuple[np.ndarray, np.ndarray, float]:
