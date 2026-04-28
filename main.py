@@ -8,16 +8,17 @@ from pathlib import Path
 import traceback
 
 TEST_PATIENT = '/homes/mlugli/BracketPrediction/application/app_data/0ab54769-02f8-49d7-b13b-b1d7d85db18a'
+TEST_RESULTS = '/homes/mlugli/BracketPrediction/application/app_data/0ab54769-02f8-49d7-b13b-b1d7d85db18a/output_reg/results/projected_points.json'
 #from pointcept.engines.defaults import default_config_parser, default_setup
 #from pointcept.models import build_model
 #from preprocessor import Preprocessor
-from segment_scan import run_segmentation_with_model
-from bond import run_bond_with_model, postprocess_predictions
+from application.segment_scan import run_segmentation_with_model
+from application.bond import run_bond_with_model, postprocess_predictions
 #from visualizers import plot_jaw
-from utils import load_model
-from timing import *
+from application.utils import load_model, prepare_metrics
+from application.timing import *
 import shutil
-from visualizers import json_to_ply
+from application.visualizers import json_to_ply
 
 class LandmarksPredictor:
     def __init__(
@@ -92,7 +93,6 @@ class LandmarksPredictor:
                 print("Post-processing failed {}".format(str(e)))
                 return
 
-        
 
 parser = argparse.ArgumentParser(
     description="Segments and predicts landmarks on a oriented scan."
@@ -111,11 +111,12 @@ if args.debug:
     debugpy.wait_for_client()
     print(">>> Debugger attached.")
 
-model = LandmarksPredictor(args.data_root,
-                           args.seg_config,
-                           args.seg_weight,
-                           args.bond_config,
-                           args.bond_weight)
-
-model.predict(Path(TEST_PATIENT), clean_previous=True, postprocess=True)
-timings.report()
+#model = LandmarksPredictor(args.data_root,
+#                           args.seg_config,
+#                           args.seg_weight,
+#                           args.bond_config,
+#                           args.bond_weight)
+#
+#model.predict(Path(TEST_PATIENT), clean_previous=True, postprocess=True)
+#timings.report()
+prepare_metrics(TEST_RESULTS)

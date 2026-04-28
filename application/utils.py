@@ -7,6 +7,7 @@ import json
 from pointcept.models import build_model
 from pointcept.engines.defaults import default_config_parser, default_setup
 import torch
+import csv
 
 
 @timed
@@ -73,7 +74,6 @@ def get_edges(faces:np.ndarray) -> np.ndarray:
     ], axis=0), axis=1), axis=0)
     return edges
 
-
 def load_json(path: Path) -> dict:
     try:
         with open(path, "r") as f:
@@ -81,7 +81,6 @@ def load_json(path: Path) -> dict:
     except Exception as e:
         print(f"⚠️  Could not read {path}: {e}")
         return {}
-
 
 def save_json(path: Path, data: dict):
     try:
@@ -98,3 +97,57 @@ def load_model(config: Path, weights: Path):
     model = model.cuda().eval()
     print("   ✅ Model loaded")
     return cfg, model
+
+
+def prepare_metrics(json_file: str):
+    '''
+    Writes a csv file next to the given json file.
+    '''
+    json_path = Path(json_file)
+    predictions = json.load(open(json_path))
+    output_path = json_path.with_suffix(".csv")
+
+    LANDMARK_KEY_MAP = {
+        "planar": "Planar",
+        "bracket": "Bracket",
+        "incisal": "Incisal",
+        "outer": "OuterPoint",
+        "gingival": "OuterPoint",
+        "mesial": "Mesial",
+        "distal": "Distal",
+        "inner": "InnerPoint",
+        "facial": "FacialPoint",
+    }
+
+    rows = []
+    for key, vals in predictions.items():
+        _, arch, ide, _, fdi = key.split("_")
+        key_base = f"{ide}_{arch}"
+        for landmark, coords in vals.items():
+            if landmark == "basePlane": continue
+            pred_landmark = LANDMARK_KEY_MAP.get(landmark)
+            if not pred_landmark: continue
+            if landmark in "cusps planar".split():
+                for coord in coords:
+                    rows.append({
+                        "key": key_base,
+                        "coord_x": coord[0],
+                        "coord_y": coord[1],
+                        "coord_z": coord[2],
+                        "class": pred_landmark,
+                        "score": 1.0
+                    })
+            else:
+                rows.append({
+                    "key": key_base,
+                    "coord_x": coords[0],
+                    "coord_y": coords[1],
+                    "coord_z": coords[2],
+                    "class": pred_landmark,
+                    "score": 1.0
+                })
+    with open(output_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["key", "coord_x", "coord_y", "coord_z", "class", "score"])
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Metrics written to {output_path}")

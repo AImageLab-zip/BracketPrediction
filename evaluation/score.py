@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""Score prediction file.
+    - mAP
+    - mAR
+"""
+
+import argparse
+import json
+import pandas as pd
+import pickle
+from metrics import eval_map, voc_ar
+import numpy as np
+
+
+def get_args():
+    """Set up command-line interface and get arguments."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-p", "--predictions_file", type=str, required=True)
+    parser.add_argument("-g", "--goldstandard_file", type=str, required=True)
+    parser.add_argument("-o", "--output", type=str, default="results.json")
+    return parser.parse_args()
+
+
+def score(gt_all, pred_all_map):
+    """
+    Calculate metrics for: AP at different distance threshold
+    """
+    score_dict = {}
+    dist_thresh_list = []
+    recall = {
+        "Mesial": [],
+        "Distal": [],
+        "Cusp": [],
+        "InnerPoint": [],
+        "OuterPoint": [],
+        "FacialPoint": []
+    }
+    for i in range(0, 30):
+        dist_thresh = 0.1 * i
+        rec, prec, ap = eval_map(pred_all_map, gt_all, dist_thresh=dist_thresh)
+        score_dict[str(i)] = ap
+        dist_thresh_list.append(dist_thresh)
+        for cat in rec.keys():
+            recall[cat].append(rec[cat][-1])
+        # Collect all values for each class
+    class_values = {'Mesial': [], 'Distal': [], 'Cusp': [], 'InnerPoint': [], 'OuterPoint': [], 'FacialPoint': []}
+    for threshold in score_dict.values():
+        for class_name in class_values.keys():
+            class_values[class_name].append(threshold[class_name])
+
+    # Calculate the mean for each class
+    map = {class_name: sum(values) / len(values) for class_name, values in class_values.items()}
+    mar = {}
+    for cat in recall.keys():
+        ar = voc_ar(np.exp(-np.asarray(dist_thresh_list)), recall, cat)
+        mar[cat] = ar
+    all_metrics = {"AP": map, "AR": mar}
+    return all_metrics
+
+
+def reformat_scores(scores):
+    fmt_scores = {}
+    metrics_cat = scores['AP']
+    fmt_scores["AP_cusp"] = metrics_cat['Cusp']
+    fmt_scores["AP_mesial_distal"] = (metrics_cat['Mesial'] + metrics_cat['Distal'])/2
+    fmt_scores["AP_inner_outer"] = (metrics_cat['InnerPoint'] + metrics_cat['OuterPoint'])/2
+    fmt_scores["AP_facial"] = metrics_cat['FacialPoint']
+    fmt_scores["mAP"] = (metrics_cat['Cusp'] + metrics_cat['Mesial'] + metrics_cat['Distal'] +
+                         metrics_cat['InnerPoint'] + metrics_cat['OuterPoint']+ metrics_cat['FacialPoint']) / 6
+
+    metrics_cat = scores['AR']
+    fmt_scores["AR_cusp"] = metrics_cat['Cusp']
+    fmt_scores["AR_mesial_distal"] = (metrics_cat['Mesial'] + metrics_cat['Distal'])/2
+    fmt_scores["AR_inner_outer"] = (metrics_cat['InnerPoint'] + metrics_cat['OuterPoint'])/2
+    fmt_scores["AR_facial"] = metrics_cat['FacialPoint']
+    fmt_scores["mAR"] = (metrics_cat['Cusp'] + metrics_cat['Mesial'] + metrics_cat['Distal'] +
+                         metrics_cat['InnerPoint'] + metrics_cat['OuterPoint'] + metrics_cat['FacialPoint']) / 6
+
+    return fmt_scores
+
+
+def main():
+    """Main function."""
+    args = get_args()
+
+    pred_submission = pd.read_csv(
+        args.predictions_file
+    )
+
+    pred_all_map = {
+        "Mesial": {},
+        "Distal": {},
+        "Cusp": {},
+        "InnerPoint": {},
+        "OuterPoint": {},
+        "FacialPoint": {}
+    }
+
+    for _, row in pred_submission.iterrows():
+        class_name = row['class']
+        key = row['key']
+        coord = [row['coord_x'], row['coord_y'], row['coord_z']]
+        prob = row['score']
+
+        if key not in pred_all_map[class_name]:
+            pred_all_map[class_name][key] = [[coord, prob]]
+        else:
+            pred_all_map[class_name][key].append([coord, prob])
+
+    with open(args.goldstandard_file, 'rb') as fp:
+        gold = pickle.load(fp)
+
+    scores = score(gold, pred_all_map)
+    scores = reformat_scores(scores)
+    with open(args.output, "w") as out:
+        res = {"submission_status": "SCORED", **scores}
+        out.write(json.dumps(res))
+
+
+if __name__ == "__main__":
+    main()
+
+
+# Example GT structure that must be saved to pickle
+""" gold = {
+    "Mesial": {
+        "patient_001": [[1.0, 2.0, 3.0]],
+        "patient_002": [[1.1, 2.1, 3.1]]
+    },
+    "Distal": {
+        "patient_001": [[1.5, 2.5, 3.5]],
+        "patient_002": [[1.6, 2.6, 3.6]]
+    },
+    "Cusp": {
+        "patient_001": [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]],
+        "patient_002": [[0.5, 0.5, 0.5], [1.5, 1.5, 1.5]]
+    },
+    "InnerPoint": {
+        "patient_001": [[2.0, 2.0, 2.0]],
+        "patient_002": [[2.1, 2.1, 2.1]]
+    },
+    "OuterPoint": {
+        "patient_001": [[3.0, 3.0, 3.0]],
+        "patient_002": [[3.1, 3.1, 3.1]]
+    },
+    "FacialPoint": {
+        "patient_001": [[4.0, 4.0, 4.0]],
+        "patient_002": [[4.1, 4.1, 4.1]]
+    }
+} """
+
+""" with open("gold.pkl", "wb") as f:
+    pickle.dump(gold, f) """
