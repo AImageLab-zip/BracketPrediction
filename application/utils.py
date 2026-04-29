@@ -8,6 +8,7 @@ from pointcept.models import build_model
 from pointcept.engines.defaults import default_config_parser, default_setup
 import torch
 import csv
+import pickle
 
 
 @timed
@@ -112,12 +113,13 @@ def prepare_metrics(json_file: str):
     predictions = json.load(open(json_path))
     output_path = json_path.with_suffix(".csv")
 
+    # don't need gingival for now
     LANDMARK_KEY_MAP = {
         "planar": "Planar",
         "bracket": "Bracket",
         "incisal": "Incisal",
+        "cusps": "Cusp",
         "outer": "OuterPoint",
-        "gingival": "OuterPoint",
         "mesial": "Mesial",
         "distal": "Distal",
         "inner": "InnerPoint",
@@ -126,7 +128,10 @@ def prepare_metrics(json_file: str):
 
     rows = []
     for key, vals in predictions.items():
-        _, arch, ide, _, fdi = key.split("_")
+        if key.startswith("STEM"): # old naming
+            _, arch, ide, _, fdi = key.split("_")
+        else: # new naming
+            ide, arch, _, fdi = key.split("_")
         key_base = f"{ide}_{arch}"
         for landmark, coords in vals.items():
             if landmark == "basePlane": continue
@@ -156,3 +161,25 @@ def prepare_metrics(json_file: str):
         writer.writeheader()
         writer.writerows(rows)
     print(f"Metrics written to {output_path}")
+
+
+def kpt_json_to_gold(json_path: str | Path, output_pickle: str | Path) -> dict:
+    """
+    Convert a landmark JSON file to the gold dictionary format, grouped by class.
+    Args:
+        json_path: path to the input .json file (e.g. '5JRH5J6E_lower__kpt.json')
+        output_pickle: path where the resulting pickle file will be saved
+    Returns:
+        gold dict in the format {class: {patient_id: [[x, y, z], ...]}}
+    """
+    json_path = Path(json_path)
+    patient_id = json_path.stem.replace("__kpt", "")  # e.g. '5JRH5J6E_lower'
+    with open(json_path, "r") as f: data = json.load(f)
+    gold = defaultdict(lambda: defaultdict(list))
+    for obj in data["objects"]:
+        gold[obj["class"]][patient_id].append(obj["coord"])
+    # Convert defaultdicts to plain dicts
+    gold = {cls: dict(patients) for cls, patients in gold.items()}
+    with open(output_pickle, "wb") as f:
+        pickle.dump(gold, f)
+    return gold

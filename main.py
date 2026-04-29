@@ -8,10 +8,13 @@ from pathlib import Path
 import traceback
 
 #TEST_PATIENT = '/homes/mlugli/BracketPrediction/application/app_data/0ab54769-02f8-49d7-b13b-b1d7d85db18a'
-TEST_PATIENT = '/homes/mlugli/BracketPrediction/application/app_data/5JRH5J6E'
+#TEST_PATIENT = '/homes/mlugli/BracketPrediction/application/app_data/15AIQVK8'
+TEST_RESULTS = '/homes/mlugli/BracketPrediction/application/app_data/15AIQVK8/output_reg/results/projected_points_rotated.json'
+TEST_GT = '/homes/mlugli/BracketPrediction/application/app_data/15AIQVK8/gt/15AIQVK8_lower__kpt.json'
+
 from application.segment_scan import run_segmentation_with_model
 from application.bond import run_bond_with_model, postprocess_predictions
-from application.utils import load_model
+from application.utils import load_model, kpt_json_to_gold, prepare_metrics
 from application.timing import *
 import shutil
 from application.visualizers import json_to_ply
@@ -23,11 +26,13 @@ class LandmarksPredictor:
         seg_weight: str,
         bond_config: str,
         bond_weight: str,
+        teethland: bool,
     ):
         self.seg_config = Path(seg_config)
         self.seg_weight= Path(seg_weight)
         self.bond_config = Path(bond_config)
         self.bond_weight = Path(bond_weight)
+        self.teethland = teethland
         print("\n🔄 Loading models on GPU …")
         self.seg_cfg,  self.seg_model  = load_model(self.seg_config,  self.seg_weight)
         self.bond_cfg, self.bond_model = load_model(self.bond_config, self.bond_weight)
@@ -44,7 +49,7 @@ class LandmarksPredictor:
         print(f"\n{'='*70}\n🦷 SEGMENTATION — {patient_dir.name}\n{'='*70}")
         try:
             ok = run_segmentation_with_model(
-                cfg=self.seg_cfg, model=self.seg_model, data_folder=patient_dir
+                cfg=self.seg_cfg, model=self.seg_model, data_folder=patient_dir, teethland=self.teethland
             )
             msg = f"Segmentation {'completed' if ok else 'failed'} for {patient_dir.name}"
             return ok, msg
@@ -76,10 +81,13 @@ class LandmarksPredictor:
             print("Bond prediction failed {}".format(msg))
             return
         if postprocess:
-            postprocess_predictions(directory, visualize=False)
+            postprocess_predictions(directory, teethland=self.teethland, visualize=False)
             print("✅ Results saved")
             json_to_ply(directory / "output_reg" / "results" / "projected_points.json",
                         directory / "output_reg" / "results" / "projected_points.ply")
+
+            json_to_ply(directory / "output_reg" / "results" / "projected_points_rotated.json",
+                        directory / "output_reg" / "results" / "projected_points_rotated.ply")
 
 
 parser = argparse.ArgumentParser(
@@ -90,6 +98,7 @@ parser.add_argument("--seg-config",     required=True, help="Segmentation config
 parser.add_argument("--seg-weight",     required=True, help="Segmentation model weights")
 parser.add_argument("--bond-config",    required=True, help="Bond prediction config file")
 parser.add_argument("--bond-weight",    required=True, help="Bond prediction model weights")
+parser.add_argument("--teethland",      required=False, action="store_true", help="Set if running on teethland scans")
 
 args = parser.parse_args()
 if args.debug:
@@ -98,11 +107,14 @@ if args.debug:
     debugpy.wait_for_client()
     print(">>> Debugger attached.")
 
-model = LandmarksPredictor(args.seg_config,
-                           args.seg_weight,
-                           args.bond_config,
-                           args.bond_weight)
-
-model.predict(Path(TEST_PATIENT), clean_previous=True, postprocess=True)
-timings.report()
-#prepare_metrics(TEST_RESULTS)
+#model = LandmarksPredictor(args.seg_config,
+#                           args.seg_weight,
+#                           args.bond_config,
+#                           args.bond_weight,
+#                           args.teethland)
+#
+#
+#model.predict(Path(TEST_PATIENT), clean_previous=True, postprocess=True)
+#timings.report()
+prepare_metrics(TEST_RESULTS)
+kpt_json_to_gold(TEST_GT, Path(TEST_GT).with_suffix(".pkl"))

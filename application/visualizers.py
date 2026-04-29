@@ -15,8 +15,8 @@ COLORS = {
     "incisal":  [0, 255, 0],
     "outer":    [0, 0, 255],
     "gingival": [255, 255, 0],
-    "mesial":   [255, 0, 255],
-    "distal":   [0, 255, 255],
+    "mesial":   [255, 0, 255], #magenta
+    "distal":   [0, 255, 255], #cyan
     "inner":    [128, 128, 255],
     "facial":   [255, 128, 0],
     "cusps":    [128, 255, 128],
@@ -446,7 +446,7 @@ def json_to_ply(json_path, output_ply):
     for tooth in data.values():
         for key, value in tooth.items():
 
-            if key == "basePlane":
+            if key == "basePlane" or key == "gingival":
                 continue  # skip axes
 
             if isinstance(value[0], list):  # list of points (cusps, planar)

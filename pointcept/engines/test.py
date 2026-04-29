@@ -1655,18 +1655,6 @@ class HeatmapTester(TesterBase):
 
 @TESTERS.register_module()
 class HeatmapTesterV2(TesterBase):
-    # Unified channel layout:
-    # 0: Bracket
-    # 1: Incisal
-    # 2: Gingival
-    # 3: Planar
-    # 4: Mesial
-    # 5: Distal
-    # 6: Cusp
-    # 7: InnerPoint
-    # 8: OuterPoint
-    # 9: FacialPoint
-
     SINGLE_POINT_CHANNELS = {
         0: "Bracket",
         1: "Incisal",
@@ -1728,27 +1716,28 @@ class HeatmapTesterV2(TesterBase):
     def _get_num_clusters_from_components(self, mesh, inds, min_k, max_k):
         from scipy.sparse import csr_matrix
         from scipy.sparse.csgraph import connected_components
-
+        # step 1: build a graph using the mesh by considering only
+        # points that surpassed the treshold (inds)
         ind_set = set(inds.tolist())
         local_idx = {g: l for l, g in enumerate(inds.tolist())}
         n = len(inds)
-
         rows, cols = [], []
         for v0, v1 in mesh.edges_unique:
             v0, v1 = int(v0), int(v1)
             if v0 in ind_set and v1 in ind_set:
                 rows += [local_idx[v0], local_idx[v1]]
                 cols += [local_idx[v1], local_idx[v0]]
-
         graph = csr_matrix((np.ones(len(rows)), (rows, cols)), shape=(n, n))
+        # step 2: count the number of connected components of this graph
         n_components, _ = connected_components(graph, directed=False)
+        # step 3: clamp to range [2,6] since we can't have less or more cusps
         return int(np.clip(n_components, min_k, max_k))
 
     def _extract_variable_point_proposal(self, mesh, channel_pred, min_k=2, max_k=6, percentile=95):
         verts = np.asarray(mesh.vertices)
         thresh = np.percentile(channel_pred, percentile)
         inds = np.nonzero(channel_pred >= thresh)[0]
-
+        # 1. get the number of clusters by building a graph and count the number of connected components
         k = self._get_num_clusters_from_components(mesh, inds, min_k, max_k)
 
         if inds.size < k:
@@ -1757,16 +1746,21 @@ class HeatmapTesterV2(TesterBase):
         local_verts = verts[inds].astype(np.float64)
         weights = channel_pred[inds].astype(np.float64)
 
+        # run K means on the full tooth mesh by using the k that we just found
         kmeans = KMeans(n_clusters=k, n_init=10, random_state=0).fit(
             local_verts, sample_weight=weights
         )
         proposals = []
+        
+        # take the nearest vertex to each cluster center as a proposal
         for center in kmeans.cluster_centers_:
             dists = np.sum((local_verts - center) ** 2, axis=1)
             proposals.append(local_verts[np.argmin(dists)].tolist())
         return proposals
 
     def _swap_mesial_distal(self, channels_proposals):
+        
+        # take the nearest vertex to each cluster center as a proposal
         channels_proposals['Mesial'], channels_proposals['Distal'] = channels_proposals['Distal'], channels_proposals['Mesial']
 
     def _mesial_distal_correction(self, channels_proposals:dict, full_path:str):

@@ -247,7 +247,7 @@ def process_tooth_predictions(mesh,
             print(f"  ⚠️  Tooth visualization failed: {e}")
     return json_data
 
-def postprocess_predictions(data_folder:Path, visualize:bool = True):
+def postprocess_predictions(data_folder:Path, teethland:bool, visualize:bool = True):
     """
     Post-processes predictions and creates visualizations.
     
@@ -308,11 +308,13 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
                 print(f"  ⚠️ Could not load or parse shift file {shift_file}: {e}")
         else:
             print(f"  ⚠️ Shift file does not exist for patient {patient_id}")
-
         # Choose rotation sequence based on arch
-        if arch == 'lower': seq = [('x', -90), ('y', 180)]
-        else: seq = [('y', 180), ('x', -90), ('y', 180)]
-
+        if teethland:
+            if arch == 'lower': seq = [('z', 180)]
+            else: seq = [('z', 180)]
+        else:
+            if arch == 'lower': seq = [('x', -90), ('y', 180)]
+            else: seq = [('y', 180), ('x', -90), ('y', 180)]
         try:
             # load tooth transform (scaling, translation/centroid)
             transform_file = teeth_path / f"{tooth_key}.json"

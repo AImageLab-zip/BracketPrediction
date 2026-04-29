@@ -4,13 +4,6 @@ It operates on the lower scan in the standard alignment and centered in it's
 center of mass, while the upper scan is also rotated around the Y axis of 180 degrees
 so that tooth 48 is overlapped with lower's tooth 28.
 This rotation will be reversed later to go back to the original reference frame.
-This script is automatically handled by the monitor, but if you want to debug it here's
-the command to run on sample patient "2":
-
-python application/segment_scan.py \
-    --config-file /homes/mlugli/BracketPrediction/application/configs/Pt_semseg_app.py \
-    --options data_folder=/homes/mlugli/BracketPrediction/application/data/2/ \
-              weight=/homes/mlugli/BracketPrediction/application/weights/segmentator_best.pth
 """
 import os
 import trimesh
@@ -254,10 +247,9 @@ def dilate_and_save_teeth(mask:np.ndarray,
         print(f"    STL: {stl_output_path}")
         print(f"    JSON: {json_output_path}")
 
-def postprocess_segmentation(scan_file: Path, mask_file: Path, output_dir: Path):
+def postprocess_segmentation(scan_file: Path, mask_file: Path, output_dir: Path, teethland=False):
     """
-    Postprocess segmentation results: split by tooth, normalize, and save.
-    
+    Postprocess segmentation results: split by tooth, normalize, and save.    
     Args:
         scan: Path to original STL file
         mask_file: Path to predicted segmentation mask (.npy)
@@ -268,9 +260,10 @@ def postprocess_segmentation(scan_file: Path, mask_file: Path, output_dir: Path)
  
     # Load mesh and mask
     mesh = trimesh.load_mesh(str(scan_file), process=False)
+    if teethland:
+        mesh.apply_transform(trimesh.transformations.rotation_matrix(np.pi, [0,0,1]))
     mesh.merge_vertices()
-    mask = np.load(mask_file)
-
+    mask = np.load(mask_file) 
     if not is_consistent(mesh.vertices, mask): return
  
     base_name = scan_file.stem
@@ -304,7 +297,7 @@ def postprocess_segmentation(scan_file: Path, mask_file: Path, output_dir: Path)
     dilate_and_save_teeth(cleaned_mask, points, faces, base_name, teeth_output_dir)
     dilate_and_save_teeth(remeshed_mask.squeeze(), points_remeshed, faces_remeshed, base_name, remeshed_teeth_output_dir)
 
-def run_segmentation_with_model(cfg, model, data_folder: Path) -> bool:
+def run_segmentation_with_model(cfg, model, data_folder: Path, teethland=True) -> bool:
     """
     Run segmentation with a pre-loaded model.
  
@@ -343,7 +336,7 @@ def run_segmentation_with_model(cfg, model, data_folder: Path) -> bool:
         scans = list(data_folder.glob("*.stl")) + list(data_folder.glob("*.obj"))
         for scan in scans:
             mask_file = output_folder / "result" / f"{scan.stem}_pred.npy"
-            postprocess_segmentation(scan, mask_file, output_folder)
+            postprocess_segmentation(scan, mask_file, output_folder, teethland=teethland)
  
         print("\n" + "="*80)
         print("Postprocessing complete!")
@@ -355,61 +348,3 @@ def run_segmentation_with_model(cfg, model, data_folder: Path) -> bool:
         import traceback
         traceback.print_exc()
         return False
-
-def main_worker(cfg):
-    os.makedirs(cfg.save_path, exist_ok=True)
-    cfg = default_setup(cfg)
-    test_cfg = dict(cfg=cfg, **cfg.test)
-    tester = TESTERS.build(test_cfg)
-    tester.test()
-
-    # Postprocessing: split and normalize teeth
-    print("\n" + "="*80)
-    print("Starting postprocessing...")
-    print("="*80 + "\n")
- 
-    data_folder = Path(cfg.data_root)
-    output_folder = Path(cfg.save_path)
- 
-    # Find STL files in data folder
-    stl_files = list(data_folder.glob("*.stl"))
- 
-    for stl_file in stl_files:
-        # Find corresponding prediction mask
-        mask_file = output_folder / "result" / f"{stl_file.stem}_pred.npy"
-        if not mask_file.exists():
-            print(f"Warning: No prediction found for {stl_file.name}, skipping...")
-            continue
-        postprocess_segmentation(stl_file, mask_file, output_folder)
-
-    print("\n" + "="*80)
-    print("Postprocessing complete!")
-    print("="*80)
-
-def segment_scan():
-    parser = default_argument_parser()
-    parser.add_argument("--no-visuals", action="store_true", help="Do not generate visualizations")
-    args = parser.parse_args()
-
-    if args.debug:
-        print("Hello, happy debugging.")
-        debugpy.listen(("0.0.0.0", 5681))
-        print(">>> Debugger is listening on port 5681. Waiting for client to attach...")
-        debugpy.wait_for_client()
-        print(">>> Debugger attached. Resuming execution.")
-    cfg = default_config_parser(args.config_file, args.options)
-    cfg._cfg_dict["data_root"] = args.options["data_folder"]
-    cfg._cfg_dict["save_path"] = str(Path(args.options["data_folder"]) / "output_seg") 
-    cfg._cfg_dict["data"]["test"]["data_root"] = args.options["data_folder"]
-    launch(
-        main_worker,
-        num_gpus_per_machine=args.num_gpus,
-        num_machines=args.num_machines,
-        machine_rank=args.machine_rank,
-        dist_url=args.dist_url,
-        cfg=(cfg,),
-    )
-
-if __name__ == "__main__":
-    segment_scan()
-    print("Finished.")

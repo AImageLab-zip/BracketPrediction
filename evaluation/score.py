@@ -10,6 +10,10 @@ import pandas as pd
 import pickle
 from metrics import eval_map, voc_ar
 import numpy as np
+import debugpy
+
+
+NEW_LANDMARKS = ["Bracket", "Planar", "Incisal"]
 
 
 def get_args():
@@ -18,6 +22,7 @@ def get_args():
     parser.add_argument("-p", "--predictions_file", type=str, required=True)
     parser.add_argument("-g", "--goldstandard_file", type=str, required=True)
     parser.add_argument("-o", "--output", type=str, default="results.json")
+    parser.add_argument("-d", "--debug", action="store_true", default=False)
     return parser.parse_args()
 
 
@@ -82,7 +87,11 @@ def reformat_scores(scores):
 def main():
     """Main function."""
     args = get_args()
-
+    if args.debug:
+        debugpy.listen(("0.0.0.0", 5681))
+        print(">>> Waiting for debugger on port 5681 …")
+        debugpy.wait_for_client()
+        print(">>> Debugger attached.")
     pred_submission = pd.read_csv(
         args.predictions_file
     )
@@ -101,7 +110,7 @@ def main():
         key = row['key']
         coord = [row['coord_x'], row['coord_y'], row['coord_z']]
         prob = row['score']
-
+        if class_name in NEW_LANDMARKS: continue
         if key not in pred_all_map[class_name]:
             pred_all_map[class_name][key] = [[coord, prob]]
         else:
@@ -114,7 +123,7 @@ def main():
     scores = reformat_scores(scores)
     with open(args.output, "w") as out:
         res = {"submission_status": "SCORED", **scores}
-        out.write(json.dumps(res))
+        out.write(json.dumps(res, indent=4))
 
 
 if __name__ == "__main__":

@@ -15,4 +15,4 @@ services:
       - PYTHONPATH=/workspace
       - DISPLAY=:99
       - API_TOKEN=${API_TOKEN}
-    command: bash /workspace/run_monitor_map_new.sh
+    command: bash /workspace/run_monitor.sh
