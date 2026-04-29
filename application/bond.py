@@ -51,6 +51,16 @@ def rotate_points(points, shift, seq):
     """Rotate a list of 3D points."""
     return [rotate_point(pt, shift, seq).tolist() for pt in points if pt is not None]
 
+
+def build_rotation_matrix(seq) -> np.ndarray:
+    """Build a combined 4x4 rotation matrix from a sequence of (axis, degrees) tuples."""
+    AXIS_VECTORS = {'x': [1, 0, 0], 'y': [0, 1, 0], 'z': [0, 0, 1]}
+    R = np.eye(4)
+    for axis, degrees in seq:
+        R = trimesh.transformations.rotation_matrix(np.deg2rad(degrees), AXIS_VECTORS[axis]) @ R
+    return R
+
+
 def process_tooth_predictions(mesh, 
                               predictions:dict,
                               patient_id:str, 
@@ -303,11 +313,6 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
         if arch == 'lower': seq = [('x', -90), ('y', 180)]
         else: seq = [('y', 180), ('x', -90), ('y', 180)]
 
-        # Compute combined homogeneous transform matrix (4x4):
-        # M = R_seq @ T_shift @ R_upper1 @ T_centroid @ S
-        # where S = scale inverse, T_centroid = centroid from tooth json,
-        # R_upper1 = initial 180deg Y for upper teeth (fdi <= 28),
-        # T_shift = shift file translation, R_seq = final rotation sequence.
         try:
             # load tooth transform (scaling, translation/centroid)
             transform_file = teeth_path / f"{tooth_key}.json"
@@ -321,72 +326,38 @@ def postprocess_predictions(data_folder:Path, visualize:bool = True):
 
             # homogeneous scale (divide by scale)
             S = np.eye(4)
-            if scale != 0:
-                S[0, 0] = S[1, 1] = S[2, 2] = 1.0 / float(scale)
+            if scale != 0: S[0, 0] = S[1, 1] = S[2, 2] = 1.0 / float(scale)
             # translation by centroid (from tooth json)
             T_centroid = trimesh.transformations.translation_matrix(centroid.tolist())
             # initial upper rotation applied during denormalization (fdi <= 28)
-            if fdi is not None and fdi <= 28:
+            if fdi is not None and fdi <= 28: 
                 R_upper1 = trimesh.transformations.rotation_matrix(np.pi, [0, 1, 0])
-            else:
+            else: 
                 R_upper1 = np.eye(4)
             # shift translation (from shift file)
             T_shift = trimesh.transformations.translation_matrix(shift.tolist())
             # final rotation sequence
-            R_seq = np.eye(4)
-            for axis, degrees in seq:
-                radians = np.deg2rad(degrees)
-                if axis == 'x':
-                    R_axis = trimesh.transformations.rotation_matrix(radians, [1, 0, 0])
-                elif axis == 'y':
-                    R_axis = trimesh.transformations.rotation_matrix(radians, [0, 1, 0])
-                else:
-                    R_axis = trimesh.transformations.rotation_matrix(radians, [0, 0, 1])
-                R_seq = R_axis @ R_seq
+            R_seq = build_rotation_matrix(seq)
 
             # Combined matrix
             M = R_seq @ T_shift @ R_upper1 @ T_centroid @ S
 
-            # Apply shift to points
-            incisal = np.array(pdata['incisal']) + shift
-            outer = np.array(pdata['outer']) + shift
-            origin = np.array(pdata['basePlane']['origin']) + shift
-            xaxis = np.array(pdata['basePlane']['xAxis']) + shift
-            yaxis = np.array(pdata['basePlane']['yAxis']) + shift
-            zaxis = np.array(pdata['basePlane']['zAxis']) + shift
-
-            # Apply rotation sequence using trimesh transformations
-            for axis, degrees in seq:
-                radians = np.deg2rad(degrees)
-                if axis == 'x':
-                    rotation = trimesh.transformations.rotation_matrix(radians, [1, 0, 0])
-                elif axis == 'y':
-                    rotation = trimesh.transformations.rotation_matrix(radians, [0, 1, 0])
-                else:
-                    rotation = trimesh.transformations.rotation_matrix(radians, [0, 0, 1])
-
-                # Apply transformation to points
-                incisal = trimesh.transformations.transform_points([incisal], rotation)[0]
-                outer = trimesh.transformations.transform_points([outer], rotation)[0]
-                origin = trimesh.transformations.transform_points([origin], rotation)[0]
-                xaxis = trimesh.transformations.transform_points([xaxis], rotation)[0]
-                yaxis = trimesh.transformations.transform_points([yaxis], rotation)[0]
-                zaxis = trimesh.transformations.transform_points([zaxis], rotation)[0]
-
-            # Copy all new points with rotation (include 'outer' and other landmarks)
+            incisal, outer, origin, xaxis, yaxis, zaxis = rotate_points(
+                [pdata['incisal'], pdata['outer'],
+                pdata['basePlane']['origin'], pdata['basePlane']['xAxis'],
+                pdata['basePlane']['yAxis'],  pdata['basePlane']['zAxis']],
+                shift, seq
+            )
             rotated_entry = {
-                'incisal': incisal.tolist(),
-                'outer': outer.tolist(),
+                'incisal': incisal,
+                'outer': outer,
                 'basePlane': {
-                    'origin': origin.tolist(),
-                    'xAxis': xaxis.tolist(),
-                    'yAxis': yaxis.tolist(),
-                    'zAxis': zaxis.tolist(),
+                    'origin': origin,
+                    'xAxis': xaxis,
+                    'yAxis': yaxis,
+                    'zAxis': zaxis,
                 },
-                # store combined homogeneous transform (from normalized prediction -> rotated space)
-                'rotation_matrix': M.tolist(),
             }
-
             # Add optional scalar points
             for key in ['gingival', 'mesial', 'distal', 'inner', 'facial', 'bracket']:
                 if pdata.get(key) is not None:
