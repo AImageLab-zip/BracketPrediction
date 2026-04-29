@@ -50,10 +50,15 @@ def rotation_180_y():
             [0, 0, -1]
         ])
 
-def parse_tooth(tooth:str) -> list[str, str, int]:
-    # Parse tooth_key: expected format "STEM_lower_0002_FDI_47"
-    _, jaw, patient_id, _, fdi = tooth.split("_")
-    return jaw, patient_id, int(fdi)
+def parse_tooth(tooth:str) -> tuple[str, str, int]:
+    # Two naming conventions are supported:
+        # "STEM_lower_0002_FDI_47"
+        # "0002_lower_FDI_47"
+    if tooth.startswith("STEM"):
+        _, arch, patient_id, _, fdi = tooth.split("_")
+    else:
+        patient_id, arch, _, fdi = tooth.split("_")
+    return arch, patient_id, int(fdi)
 
 @timed
 def fit_segmask(segmask:np.ndarray, source:np.ndarray, dest:np.ndarray):

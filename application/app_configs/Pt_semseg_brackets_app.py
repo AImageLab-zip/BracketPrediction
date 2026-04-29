@@ -8,7 +8,6 @@ _base_ = ["default_runtime.py"]
 # -----------------------------  
 num_classes = 17 # 16 FDI Indices + Gum
 ignore_index = -1
-num_worker = 8 # for train
 mix_prob = 0
 empty_cache = False
 enable_amp = True

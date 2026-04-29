@@ -254,26 +254,26 @@ def dilate_and_save_teeth(mask:np.ndarray,
         print(f"    STL: {stl_output_path}")
         print(f"    JSON: {json_output_path}")
 
-def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path):
+def postprocess_segmentation(scan_file: Path, mask_file: Path, output_dir: Path):
     """
     Postprocess segmentation results: split by tooth, normalize, and save.
     
     Args:
-        stl_file: Path to original STL file
+        scan: Path to original STL file
         mask_file: Path to predicted segmentation mask (.npy)
         output_dir: Output directory for processed teeth
     """
     
-    print(f"Postprocessing {stl_file.name}...")
+    print(f"Postprocessing {scan_file.name}...")
  
     # Load mesh and mask
-    mesh = trimesh.load_mesh(str(stl_file), process=False)
+    mesh = trimesh.load_mesh(str(scan_file), process=False)
     mesh.merge_vertices()
     mask = np.load(mask_file)
 
     if not is_consistent(mesh.vertices, mask): return
  
-    base_name = stl_file.stem
+    base_name = scan_file.stem
     # Single teeth
     teeth_output_dir = output_dir / "teeth"
     remeshed_teeth_output_dir = output_dir / "remeshed_teeth"
@@ -289,7 +289,7 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path):
     faces = np.array(mesh.faces)
     cleaned_mask = clean_segmentation_mask(mask, points, faces) 
     np.save(mask_file, cleaned_mask) # store cleaned segmentation mask
-    remeshed_scan = custom_remesh(stl_file) # run custom remeshing on full scan
+    remeshed_scan = custom_remesh(scan_file) # run custom remeshing on full scan
     save_remeshed(remeshed_scan, remeshed_scan_filename)
     remeshed_scan_trimesh = trimesh.load_mesh(remeshed_scan_filename) # re-load using trimesh (fast)
     remeshed_mask = fit_segmask(cleaned_mask, points, remeshed_scan_trimesh.vertices)
@@ -298,7 +298,7 @@ def postprocess_segmentation(stl_file: Path, mask_file: Path, output_dir: Path):
     points_remeshed = np.array(remeshed_scan_trimesh.vertices)
     faces_remeshed = np.array(remeshed_scan_trimesh.faces)
 
-    try: create_segmentation_visualization(mesh, cleaned_mask, stl_file.stem, output_dir)
+    try: create_segmentation_visualization(mesh, cleaned_mask, scan_file.stem, output_dir)
     except Exception as e: print(f"  ⚠️  Visualization failed (continuing anyway): {e}")
     # Get unique FDI indices from cleaned mask (excluding 0 which is gum)
     dilate_and_save_teeth(cleaned_mask, points, faces, base_name, teeth_output_dir)
@@ -321,9 +321,9 @@ def run_segmentation_with_model(cfg, model, data_folder: Path) -> bool:
         cfg._cfg_dict["data_root"] = str(data_folder)
         cfg._cfg_dict["save_path"] = str(Path(data_folder) / "output_seg")
         cfg._cfg_dict["data"]["test"]["data_root"] = str(data_folder)
-        
+ 
         os.makedirs(cfg.save_path, exist_ok=True)
-        
+ 
         # Set up configuration
         cfg = default_setup(cfg)
  
@@ -331,29 +331,23 @@ def run_segmentation_with_model(cfg, model, data_folder: Path) -> bool:
         test_cfg = dict(cfg=cfg, model=model, **cfg.test)
         tester = TESTERS.build(test_cfg)
         tester.test()
-        
+ 
         # Postprocessing: split and normalize teeth
         print("\n" + "="*80)
         print("Starting postprocessing...")
         print("="*80 + "\n")
-        
+ 
         output_folder = Path(cfg.save_path)
-        
+ 
         # Find STL files in data folder
-        stl_files = list(data_folder.glob("*.stl"))
-        
-        for stl_file in stl_files:
-            # Find corresponding prediction mask
-            mask_file = output_folder / "result" / f"{stl_file.stem}_pred.npy"
-            if not mask_file.exists():
-                print(f"Warning: No prediction found for {stl_file.name}, skipping...")
-                continue
-            postprocess_segmentation(stl_file, mask_file, output_folder)
-        
+        scans = list(data_folder.glob("*.stl")) + list(data_folder.glob("*.obj"))
+        for scan in scans:
+            mask_file = output_folder / "result" / f"{scan.stem}_pred.npy"
+            postprocess_segmentation(scan, mask_file, output_folder)
+ 
         print("\n" + "="*80)
         print("Postprocessing complete!")
         print("="*80)
-        
         return True
         
     except Exception as e:

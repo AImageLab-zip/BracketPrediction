@@ -1,21 +1,17 @@
 import os
 import sys
 sys.path.append(os.path.abspath("application"))
-#os.environ["VTK_OPENGL_HAS_EGL"] = "0"
+os.environ["VTK_OPENGL_HAS_EGL"] = "0"
 import argparse
 import debugpy
 from pathlib import Path
 import traceback
 
-TEST_PATIENT = '/homes/mlugli/BracketPrediction/application/app_data/0ab54769-02f8-49d7-b13b-b1d7d85db18a'
-TEST_RESULTS = '/homes/mlugli/BracketPrediction/application/app_data/0ab54769-02f8-49d7-b13b-b1d7d85db18a/output_reg/results/projected_points.json'
-#from pointcept.engines.defaults import default_config_parser, default_setup
-#from pointcept.models import build_model
-#from preprocessor import Preprocessor
+#TEST_PATIENT = '/homes/mlugli/BracketPrediction/application/app_data/0ab54769-02f8-49d7-b13b-b1d7d85db18a'
+TEST_PATIENT = '/homes/mlugli/BracketPrediction/application/app_data/5JRH5J6E'
 from application.segment_scan import run_segmentation_with_model
 from application.bond import run_bond_with_model, postprocess_predictions
-#from visualizers import plot_jaw
-from application.utils import load_model, prepare_metrics
+from application.utils import load_model
 from application.timing import *
 import shutil
 from application.visualizers import json_to_ply
@@ -23,23 +19,19 @@ from application.visualizers import json_to_ply
 class LandmarksPredictor:
     def __init__(
         self,
-        data_root: str,
         seg_config: str,
         seg_weight: str,
         bond_config: str,
         bond_weight: str,
     ):
-        self.data_root = Path(data_root)
         self.seg_config = Path(seg_config)
         self.seg_weight= Path(seg_weight)
         self.bond_config = Path(bond_config)
         self.bond_weight = Path(bond_weight)
-        # Load both models once
         print("\n🔄 Loading models on GPU …")
         self.seg_cfg,  self.seg_model  = load_model(self.seg_config,  self.seg_weight)
         self.bond_cfg, self.bond_model = load_model(self.bond_config, self.bond_weight)
         print("✅ Both models ready.\n")
-        print(f"   Data root     : {self.data_root}")
 
     def _clean_outputs(self, directory:Path):
         for name in ("output_reg", "output_seg"):
@@ -84,21 +76,16 @@ class LandmarksPredictor:
             print("Bond prediction failed {}".format(msg))
             return
         if postprocess:
-            try:
-                postprocess_predictions(directory, visualize=False)
-                print("✅ Results saved")
-                json_to_ply(directory / "output_reg" / "results" / "projected_points.json",
-                            directory / "output_reg" / "results" / "projected_points.ply")
-            except Exception as e:
-                print("Post-processing failed {}".format(str(e)))
-                return
+            postprocess_predictions(directory, visualize=False)
+            print("✅ Results saved")
+            json_to_ply(directory / "output_reg" / "results" / "projected_points.json",
+                        directory / "output_reg" / "results" / "projected_points.ply")
 
 
 parser = argparse.ArgumentParser(
     description="Segments and predicts landmarks on a oriented scan."
 )
 parser.add_argument("--debug",          action="store_true", help="Wait for debugger on port 5681")
-parser.add_argument("--data-root",      required=True, help="Root directory with patient folders")
 parser.add_argument("--seg-config",     required=True, help="Segmentation config file")
 parser.add_argument("--seg-weight",     required=True, help="Segmentation model weights")
 parser.add_argument("--bond-config",    required=True, help="Bond prediction config file")
@@ -111,12 +98,11 @@ if args.debug:
     debugpy.wait_for_client()
     print(">>> Debugger attached.")
 
-#model = LandmarksPredictor(args.data_root,
-#                           args.seg_config,
-#                           args.seg_weight,
-#                           args.bond_config,
-#                           args.bond_weight)
-#
-#model.predict(Path(TEST_PATIENT), clean_previous=True, postprocess=True)
-#timings.report()
-prepare_metrics(TEST_RESULTS)
+model = LandmarksPredictor(args.seg_config,
+                           args.seg_weight,
+                           args.bond_config,
+                           args.bond_weight)
+
+model.predict(Path(TEST_PATIENT), clean_previous=True, postprocess=True)
+timings.report()
+#prepare_metrics(TEST_RESULTS)
