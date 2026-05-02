@@ -113,14 +113,6 @@ def process_tooth_predictions(mesh,
         print(f"⚠️ Missing essential points for tooth {fdi}")
         return None
 
-    # Find face for bracket to get normal
-    bracket_face_id = None
-    try:
-        _, _, faces = mesh.nearest.on_surface([bracket])
-        bracket_face_id = faces
-    except:
-        pass
-
     json_data = None
 
     # Get the 3 axis of the tooth 
@@ -209,6 +201,8 @@ def postprocess_predictions(data_folder:Path,
     Args:
         data_folder: Path to the data folder containing predictions
         visualize: toggles visualization
+        cache: cache that stores single teeth mesh objects
+        preprocessor: preprocessor that automatically handles scan normalization
     """ 
     output_reg_path = data_folder / "output_reg" / "results"
     teeth_path = data_folder / "output_seg" / "teeth"
@@ -240,11 +234,14 @@ def postprocess_predictions(data_folder:Path,
             all_points_data[tooth_key] = points_data
 
     # Save all points to a single JSON file
-    output_json_path = output_reg_path / "projected_points.json"
-    with open(output_json_path, "w") as f: json.dump(all_points_data, f, indent=4)
-    print(f"\n💾 Saved all projected points to: {output_json_path}")
+    # output_json_path = output_reg_path / "projected_points.json"
+    # with open(output_json_path, "w") as f: json.dump(all_points_data, f, indent=4)
+    # print(f"\n💾 Saved all projected points to: {output_json_path}")
 
-    # Rotated version of points file.
+    # Rotate points to fit the original scan
+    # 1) Shift if the scan has been centered to origin 
+    # 2) Rotations
+
     rotated_points = {}
     for tooth_key, pdata in all_points_data.items():
         arch, patient_id, fdi = parse_tooth(tooth_key)
@@ -300,7 +297,7 @@ def postprocess_predictions(data_folder:Path,
         except Exception as e:
             print(f"⚠️ Error rotating points for {tooth_key}: {e}")
 
-    rotated_output_path = output_reg_path / "projected_points_rotated.json"
+    rotated_output_path = output_reg_path / "landmarks.json"
     with open(rotated_output_path, 'w') as f: json.dump(rotated_points, f, indent=4)
     print(f"\n💾 Saved rotated projected points to: {rotated_output_path}")
     print(f"\n✅ Post-processing complete.")

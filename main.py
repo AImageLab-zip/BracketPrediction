@@ -117,11 +117,11 @@ class LandmarksPredictor:
                 preprocessor=self.preprocessor)
             print("✅ Results saved")
             if self.save_ply:
-                json_to_ply(directory / "output_reg" / "results" / "projected_points.json",
-                            directory / "output_reg" / "results" / "projected_points.ply")
+                json_to_ply(directory / "output_reg" / "results" / "landmarks.json",
+                            directory / "output_reg" / "results" / "landmarks.ply")
 
-                json_to_ply(directory / "output_reg" / "results" / "projected_points_rotated.json",
-                            directory / "output_reg" / "results" / "projected_points_rotated.ply")
+                #json_to_ply(directory / "output_reg" / "results" / "projected_points_rotated.json",
+                #            directory / "output_reg" / "results" / "projected_points_rotated.ply")
 
 def _merge_gold(kpt_path: Path, merged_gold: dict):
     patient_id = kpt_path.stem.replace("__kpt", "")
@@ -143,7 +143,7 @@ def test_3dteethland(dataset_path:Path, files:list[str], model:LandmarksPredicto
                 if filepath.exists(): break
             if filepath.exists() and  f"{patient}_{arch}" in test_samples:
                 model.predict(dirpath / patient, clean_previous=True, postprocess=True)
-                rows += teethland_output(dirpath / patient / "output_reg" / "results" / "projected_points_rotated.json")
+                rows += teethland_output(dirpath / patient / "output_reg" / "results" / "landmarks.json")
                 kpt_path = dirpath / patient / f"{patient}_{arch}__kpt.json"
                 if kpt_path.exists(): _merge_gold(kpt_path, merged_gold)
     write_rows(rows, '/homes/mlugli/BracketPrediction/evaluation/our_predictions.csv')
