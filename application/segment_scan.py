@@ -9,7 +9,7 @@ import os
 import trimesh
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
-
+from pointcept.datasets.preprocessing.autobonding.scan_normalizer import ScanNormalizer
 MAPPING = {
     1: 48, 2: 47, 3: 46,
     4: 45, 5: 44, 6: 43,
@@ -18,20 +18,15 @@ MAPPING = {
     13: 35, 14: 36, 15: 37,
     16: 38
 }
-import debugpy
 from application.visualizers import create_segmentation_visualization
-from pointcept.engines.defaults import (
-    default_argument_parser,
-    default_config_parser,
-    default_setup,
-)
+from pointcept.engines.defaults import default_setup
 from pointcept.engines.test import TESTERS
 from pathlib import Path
-from pointcept.engines.launch import launch
 import numpy as np
 import json
 from scipy.spatial import cKDTree
 from application.utils import *
+from application.cache import TeethCache
 
 
 def normalize(points: np.ndarray, flip:bool=False) -> tuple[np.ndarray, np.ndarray, float]:
@@ -81,7 +76,6 @@ def compute_dilation_masks(mask: np.ndarray, vertices: np.ndarray) -> dict[int, 
 
     return result
 
-@timed
 def _remove_small_labels(mask:np.ndarray, points:np.ndarray, min_fraction:float=0.4) -> np.ndarray:
     tooth_labels = np.unique(mask[mask != 0])
     if len(tooth_labels) == 0:
@@ -123,7 +117,6 @@ def _remove_small_labels(mask:np.ndarray, points:np.ndarray, min_fraction:float=
  
     return new_mask
 
-@timed
 def _keep_largest_components(mask: np.ndarray, faces: np.ndarray) -> np.ndarray:
     """
     AI generated function.
@@ -187,7 +180,8 @@ def dilate_and_save_teeth(mask:np.ndarray,
                           points:np.ndarray, 
                           faces:np.ndarray, 
                           base_name:str,
-                          teeth_output_dir:Path):
+                          teeth_output_dir:Path,
+                          cache:TeethCache = None):
     unique_fdi_indices = np.unique(mask)
     print(f"Found {len(unique_fdi_indices)} unique classes: {unique_fdi_indices}")
  
@@ -229,75 +223,102 @@ def dilate_and_save_teeth(mask:np.ndarray,
             continue  # fix: was missing, would crash on .save() below
 
  
-        # Save tooth
+        # FDI index mapping
         if "lower" in base_name: fdi_index = MAPPING[fdi_index]
         if "upper" in base_name: fdi_index = MAPPING[fdi_index]-20
-        stl_output_path = teeth_output_dir / f"{base_name}_FDI_{fdi_index}.stl"
-        tooth_mesh.export(str(stl_output_path))
- 
-        # Save normalization parameters to JSON
-        json_output_path = teeth_output_dir / f"{base_name}_FDI_{fdi_index}.json"
+        
+        # Prepare tooth key and transformation data
+        tooth_key = f"{base_name}_FDI_{fdi_index}"
         json_data = {
             "translation": translation.tolist(),
             "scaling": float(scale)
         }
-        with open(json_output_path, 'w') as f:
-            json.dump(json_data, f, indent=4)
-        print(f"  Saved FDI {fdi_index}: {len(class_points)} points, {len(class_faces)} faces")
-        print(f"    STL: {stl_output_path}")
-        print(f"    JSON: {json_output_path}")
+        
+        # Store or save tooth
+        if cache:
+            # Cache mode: store in memory only
+            cache.store_mesh(tooth_key, tooth_mesh, json_data)
+            print(f"  Cached FDI {fdi_index}: {len(class_points)} points, {len(class_faces)} faces")
+        else:
+            # Disk mode: save to file
+            stl_output_path = teeth_output_dir / f"{tooth_key}.stl"
+            try:
+                tooth_mesh.export(str(stl_output_path))
+                # Save normalization parameters to JSON
+                json_output_path = teeth_output_dir / f"{tooth_key}.json"
+                with open(json_output_path, 'w') as f:
+                    json.dump(json_data, f, indent=4)
+                print(f"  Saved FDI {fdi_index}: {len(class_points)} points, {len(class_faces)} faces")
+                print(f"    STL: {stl_output_path}")
+                print(f"    JSON: {json_output_path}")
+            except:
+                print("⚠ Warning, could not export {}".format(stl_output_path))
 
-def postprocess_segmentation(scan_file: Path, mask_file: Path, output_dir: Path, teethland=False):
+
+def postprocess_segmentation(scan_file: Path, 
+                             mask_file: Path, 
+                             output_dir: Path, 
+                             remesh:bool =False,
+                             visualize:bool = False,
+                             cache:TeethCache = None,
+                             preprocessor:ScanNormalizer | None = None):
     """
     Postprocess segmentation results: split by tooth, normalize, and save.    
     Args:
         scan: Path to original STL file
         mask_file: Path to predicted segmentation mask (.npy)
+        remesh: Enables remeshing of the scan
         output_dir: Output directory for processed teeth
     """
     
     print(f"Postprocessing {scan_file.name}...")
- 
+    arch = "lower" if "lower" in scan_file.name else "upper"
     # Load mesh and mask
     mesh = trimesh.load_mesh(str(scan_file), process=False)
-    if teethland:
-        mesh.apply_transform(trimesh.transformations.rotation_matrix(np.pi, [0,0,1]))
+    if preprocessor: mesh = preprocessor.apply(mesh, arch) 
     mesh.merge_vertices()
     mask = np.load(mask_file) 
     if not is_consistent(mesh.vertices, mask): return
  
     base_name = scan_file.stem
-    # Single teeth
     teeth_output_dir = output_dir / "teeth"
-    remeshed_teeth_output_dir = output_dir / "remeshed_teeth"
-    # Full scans 
-    remeshed_output_dir = output_dir / "remeshed"
-    remeshed_scan_filename = output_dir / "remeshed" / Path(base_name).with_suffix(".stl")
 
     teeth_output_dir.mkdir(parents=True, exist_ok=True)
-    remeshed_output_dir.mkdir(parents=True, exist_ok=True)
-    remeshed_teeth_output_dir.mkdir(parents=True, exist_ok=True)
-
     points = np.array(mesh.vertices)
     faces = np.array(mesh.faces)
     cleaned_mask = clean_segmentation_mask(mask, points, faces) 
     np.save(mask_file, cleaned_mask) # store cleaned segmentation mask
-    remeshed_scan = custom_remesh(scan_file) # run custom remeshing on full scan
-    save_remeshed(remeshed_scan, remeshed_scan_filename)
-    remeshed_scan_trimesh = trimesh.load_mesh(remeshed_scan_filename) # re-load using trimesh (fast)
-    remeshed_mask = fit_segmask(cleaned_mask, points, remeshed_scan_trimesh.vertices)
-    np.save(remeshed_output_dir / Path(base_name).with_suffix(".npy"), remeshed_mask)
+
+    if remesh:
+        remeshed_teeth_output_dir = output_dir / "remeshed_teeth"
+        remeshed_output_dir = output_dir / "remeshed"
+        remeshed_scan_filename = output_dir / "remeshed" / Path(base_name).with_suffix(".stl")
+        remeshed_output_dir.mkdir(parents=True, exist_ok=True)
+        remeshed_teeth_output_dir.mkdir(parents=True, exist_ok=True)
+        remeshed_scan = custom_remesh(scan_file) # run custom remeshing on full scan
+        save_remeshed(remeshed_scan, remeshed_scan_filename)
+        remeshed_scan_trimesh = trimesh.load_mesh(remeshed_scan_filename) # re-load using trimesh (fast)
+        remeshed_mask = fit_segmask(cleaned_mask, points, remeshed_scan_trimesh.vertices)
+        np.save(remeshed_output_dir / Path(base_name).with_suffix(".npy"), remeshed_mask)
     
-    points_remeshed = np.array(remeshed_scan_trimesh.vertices)
-    faces_remeshed = np.array(remeshed_scan_trimesh.faces)
+        points_remeshed = np.array(remeshed_scan_trimesh.vertices)
+        faces_remeshed = np.array(remeshed_scan_trimesh.faces)
+        dilate_and_save_teeth(remeshed_mask.squeeze(), points_remeshed, faces_remeshed, base_name, remeshed_teeth_output_dir, cache=cache)
 
-    try: create_segmentation_visualization(mesh, cleaned_mask, scan_file.stem, output_dir)
-    except Exception as e: print(f"  ⚠️  Visualization failed (continuing anyway): {e}")
+    if visualize:
+        try: create_segmentation_visualization(mesh, cleaned_mask, scan_file.stem, output_dir)
+        except Exception as e: print(f"  ⚠️  Visualization failed (continuing anyway): {e}")
     # Get unique FDI indices from cleaned mask (excluding 0 which is gum)
-    dilate_and_save_teeth(cleaned_mask, points, faces, base_name, teeth_output_dir)
-    dilate_and_save_teeth(remeshed_mask.squeeze(), points_remeshed, faces_remeshed, base_name, remeshed_teeth_output_dir)
+    dilate_and_save_teeth(cleaned_mask, points, faces, base_name, teeth_output_dir, cache=cache)
 
-def run_segmentation_with_model(cfg, model, data_folder: Path, teethland=True) -> bool:
+@timed
+def run_segmentation_with_model(cfg, 
+                                model, 
+                                data_folder: Path, 
+                                remesh=False, 
+                                visualize=False,
+                                cache:TeethCache = None, 
+                                preprocessor:ScanNormalizer | None = None) -> bool:
     """
     Run segmentation with a pre-loaded model.
  
@@ -305,7 +326,10 @@ def run_segmentation_with_model(cfg, model, data_folder: Path, teethland=True) -
         cfg: Configuration object
         model: Pre-loaded segmentation model
         data_folder: Path to data folder containing STL files
- 
+        remesh: set to true if you want to save a remeshed version of the scan
+        visualize: set to true if you want to render the 3d segmentation
+        teethland: must set to true if testing on 3dteethland original scans
+        cache: Optional TeethCache for mesh caching
     Returns:
         bool: True if successful, False otherwise
     """
@@ -336,7 +360,13 @@ def run_segmentation_with_model(cfg, model, data_folder: Path, teethland=True) -
         scans = list(data_folder.glob("*.stl")) + list(data_folder.glob("*.obj"))
         for scan in scans:
             mask_file = output_folder / "result" / f"{scan.stem}_pred.npy"
-            postprocess_segmentation(scan, mask_file, output_folder, teethland=teethland)
+            postprocess_segmentation(scan, 
+                mask_file, 
+                output_folder, 
+                remesh=remesh, 
+                visualize=visualize,
+                cache=cache,
+                preprocessor=preprocessor)
  
         print("\n" + "="*80)
         print("Postprocessing complete!")

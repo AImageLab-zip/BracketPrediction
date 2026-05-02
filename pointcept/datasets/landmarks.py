@@ -225,3 +225,128 @@ class BracketsV2(DefaultDataset):
     def __len__(self):
         if self.debug: return 2 # if debugging, run on just 2 samples
         return len(self.data_list) * self.loop
+
+
+@DATASETS.register_module()
+class BracketsV2Cached(DefaultDataset):
+    """
+    Dataset that loads teeth from cache instead of disk.
+    Used when cache is enabled to avoid disk I/O.
+    """
+ 
+    def __init__(
+        self,
+        data_root,
+        custom_cache=None,
+        split="train",
+        debug=False,
+        transform=None,
+        test_mode=False,
+        test_cfg=None,
+        loop=1,
+        fold=None,
+        production=False,
+    ):
+        self.custom_cache = custom_cache
+        self.fold = fold
+        self.production = production
+        if custom_cache is None:
+            raise ValueError("BracketsV2Cached requires a cache parameter")
+        super().__init__(
+            split=split,
+            data_root=data_root,
+            transform=transform,
+            test_mode=test_mode,
+            test_cfg=test_cfg,
+            loop=loop,
+        )
+        self.debug = debug
+        if test_mode:
+            self.post_transform = Compose(test_cfg.post_transform)  
+            self.aug_transform = [Compose(aug) for aug in test_cfg.aug_transform]
+ 
+    def get_data_list(self):
+        """Get tooth keys from cache."""
+        tooth_keys = list(self.custom_cache.meshes.keys())
+        print(f"Loaded {len(tooth_keys)} samples from cache")
+        return tooth_keys
+    
+    def get_data(self, idx, testing=False):
+        """Load tooth data from cache."""
+        tooth_key = self.data_list[idx % len(self.data_list)]
+        
+        # Get mesh and transform from cache
+        mesh = self.custom_cache.meshes[tooth_key]
+        transform_data = self.custom_cache.transforms[tooth_key]
+        
+        coord = mesh.vertices.astype(np.float32)
+        normal = mesh.vertex_normals.astype(np.float32)
+        landmarks = {}  # Empty in production mode
+
+        if self.production:
+            segment = np.empty((coord.shape[0], 10), dtype=np.float32)
+            validity_mask = np.zeros((coord.shape[0], 10), dtype=np.uint8)
+        else:
+            # For cached mode, produce empty heatmaps (production mode equivalent)
+            segment = np.empty((coord.shape[0], 10), dtype=np.float32)
+            validity_mask = np.zeros((coord.shape[0], 10), dtype=np.uint8)
+
+        d = {
+            "coord": coord,
+            "normal": normal,
+            "name": tooth_key,
+            "full_path": tooth_key,
+            "landmarks": landmarks,
+            "segment": segment,
+            "validity_mask": validity_mask,
+        }
+        return d
+
+    def prepare_test_data(self, idx):
+        data_dict = self.get_data(idx, testing=True)  
+        data_dict = self.transform(data_dict)
+ 
+        # ============Extract ground truth data==============
+        result_dict = dict(
+            segment=data_dict.pop("segment"),  
+            validity_mask=data_dict.pop("validity_mask"),
+            landmarks=data_dict.pop("landmarks"),
+            name=data_dict.get("name"),
+            full_path = data_dict.get("full_path")
+        )
+        # ==================================================
+
+        if "origin_segment" in data_dict:
+            result_dict["origin_segment"] = data_dict.pop("origin_segment")
+            if "inverse" in result_dict:
+                result_dict["inverse"] = data_dict.pop("inverse")
+        if "origin_validity_mask" in data_dict:
+            result_dict["origin_validity_mask"] = data_dict.pop("origin_validity_mask")
+    
+        # Create fragments with augmentations
+        data_dict_list = []
+        for aug in self.aug_transform:
+            data_dict_list.append(aug(deepcopy(data_dict)))
+    
+        fragment_list = []
+        for data in data_dict_list:
+            if self.test_voxelize is not None:
+                data_part_list = self.test_voxelize(data)
+            else:
+                data["index"] = np.arange(data["coord"].shape[0])
+                data_part_list = [data]
+            for data_part in data_part_list:
+                if self.test_crop is not None:
+                    data_part = self.test_crop(data_part)
+                else:
+                    data_part = [data_part]
+                fragment_list += data_part
+    
+        for i in range(len(fragment_list)):
+            fragment_list[i] = self.post_transform(fragment_list[i])
+        result_dict["fragment_list"] = fragment_list
+        return result_dict
+    
+    def __len__(self):
+        if self.debug: return 2
+        return len(self.data_list) * self.loop

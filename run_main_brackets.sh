@@ -8,3 +8,5 @@ python main.py \
     --seg-weight  application/app_weights/segmentator_best.pth \
     --bond-config application/app_configs/Pt_landmarks_app.py \
     --bond-weight application/app_weights/heatmap_landmarks.pth \
+    --cache \
+    --save-ply \

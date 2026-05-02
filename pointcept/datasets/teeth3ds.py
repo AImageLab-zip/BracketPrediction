@@ -14,7 +14,7 @@ from pathlib import Path
 from pointcept.datasets.builder import DATASETS
 from pointcept.datasets.transform import Compose
 from pointcept.datasets.defaults import DefaultDataset
-
+from pointcept.datasets.preprocessing.autobonding.scan_normalizer import ScanNormalizer
 
 SPLIT_FILE_MAPPING = {
     'train': ['training_lower.txt', 'training_upper.txt'],
@@ -30,7 +30,6 @@ DEFAULT_LABEL_MAPPING = {
     35: 13, 36: 14, 37: 15,
     38: 16,
 }
-
 
 @DATASETS.register_module()
 class IosDatasetTeeth3ds(DefaultDataset):
@@ -48,12 +47,14 @@ class IosDatasetTeeth3ds(DefaultDataset):
         loop=1,
         ignore_index=0,
         debug=False,
+        preprocessing=None,
     ):
         self.fold = fold
         self.debug = debug
         self.load_segment = load_segment
         self.default_mapping = DEFAULT_LABEL_MAPPING
-
+        self.preprocessing = preprocessing
+        self.preprocessor = ScanNormalizer(self.preprocessing)
         super().__init__(
             split=split,
             data_root=data_root,
@@ -78,7 +79,7 @@ class IosDatasetTeeth3ds(DefaultDataset):
             file_list = [
                 os.path.relpath(os.path.join(root, f), self.data_root)
                 for root, _, files in os.walk(self.data_root)
-                for f in files if f.endswith('.obj')
+                for f in files if f.endswith(('.obj', '.stl'))
             ]
             print(f"Loaded {len(file_list)} samples from {self.data_root} (inference mode)")
             return file_list
@@ -106,9 +107,11 @@ class IosDatasetTeeth3ds(DefaultDataset):
                     patient_id = line.strip().split('_')[0]
                     if not patient_id:
                         continue
-                    obj_path = Path(self.data_root) / arch / patient_id / f"{patient_id}_{arch}.obj"
-                    if obj_path.exists():
-                        file_list.append(str(Path(arch) / patient_id / f"{patient_id}_{arch}.obj"))
+                    for ext in (".obj", ".stl"):
+                        obj_path = Path(self.data_root) / arch / patient_id / f"{patient_id}_{arch}{ext}"
+                        if obj_path.exists():
+                            file_list.append(str(Path(arch) / patient_id / f"{patient_id}_{arch}{ext}"))
+                            break
                     else:
                         print(f"Warning: File not found: {obj_path}")
 
@@ -116,13 +119,28 @@ class IosDatasetTeeth3ds(DefaultDataset):
         return file_list
 
     def _load_obj(self, obj_path):
-        """Load OBJ file using trimesh with process=False to preserve vertex order."""
+        arch = "lower" if "lower" in obj_path else "upper"
         try:
-            mesh = trimesh.load(obj_path, process=False)
+            if Path(obj_path).suffix == ".stl":
+                mesh = trimesh.load(obj_path, force='mesh')
+            else:
+                mesh = trimesh.load_mesh(obj_path, process=False)
+            if self.preprocessing:
+                mesh = self.preprocessor.apply(mesh, arch)
             return mesh.vertices.astype(np.float32), mesh.vertex_normals.astype(np.float32)
         except Exception:
             print(f"Couldn't load sample {obj_path}")
             raise
+    #def _load_obj(self, obj_path):
+    #    """Load OBJ file using trimesh with process=False to preserve vertex order."""
+    #    arch = "lower" if "lower" in obj_path else "upper"
+    #    try:
+    #        mesh = trimesh.load_mesh(obj_path, process=False)
+    #        if self.preprocessing: mesh = self.preprocessor.apply(mesh, arch) 
+    #        return mesh.vertices.astype(np.float32), mesh.vertex_normals.astype(np.float32)
+    #    except Exception:
+    #        print(f"Couldn't load sample {obj_path}")
+    #        raise
 
     def _load_json(self, json_path):
         with open(json_path) as f:
@@ -137,7 +155,7 @@ class IosDatasetTeeth3ds(DefaultDataset):
     def get_data(self, idx, testing=False):
         file_rel_path = self.data_list[idx % len(self.data_list)]
         obj_path = os.path.join(self.data_root, file_rel_path)
-        json_path = obj_path.replace(".obj", ".json")
+        json_path = str(Path(obj_path).with_suffix(".json"))
 
         coord, normal = self._load_obj(obj_path)
 

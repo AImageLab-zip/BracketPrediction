@@ -75,10 +75,10 @@ data = dict(
         ignore_index = ignore_index,
         load_segment = False,
         transform=[
-            dict(type="NormalizeCoord"), 
-            dict(type="RandomRotateTargetAngle", angle=[0.5], axis="z", center=[0, 0, 0], p=1),
+            dict(type="NormalizeCoord"),
         ],
         test_mode=True,
+        preprocessing = '/homes/mlugli/BracketPrediction/3dteethland_preprocessing.yaml',
         test_cfg=dict(
             voxelize=dict(
                 type="GridSample",

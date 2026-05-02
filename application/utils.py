@@ -8,7 +8,7 @@ from pointcept.models import build_model
 from pointcept.engines.defaults import default_config_parser, default_setup
 import torch
 import csv
-import pickle
+import trimesh
 
 
 @timed
@@ -105,14 +105,21 @@ def load_model(config: Path, weights: Path):
     return cfg, model
 
 
-def prepare_metrics(json_file: str):
+def write_rows(rows:list, output_path:str | Path):
+    with open(output_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["key", "coord_x", "coord_y", "coord_z", "class", "score"])
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Metrics written to {output_path}")
+
+def teethland_output(json_file: str | Path, write_single=False):
     '''
     Writes a csv file next to the given json file.
     '''
     json_path = Path(json_file)
     predictions = json.load(open(json_path))
     output_path = json_path.with_suffix(".csv")
-
+    rows = []
     # don't need gingival for now
     LANDMARK_KEY_MAP = {
         "planar": "Planar",
@@ -125,8 +132,6 @@ def prepare_metrics(json_file: str):
         "inner": "InnerPoint",
         "facial": "FacialPoint",
     }
-
-    rows = []
     for key, vals in predictions.items():
         if key.startswith("STEM"): # old naming
             _, arch, ide, _, fdi = key.split("_")
@@ -156,30 +161,39 @@ def prepare_metrics(json_file: str):
                     "class": pred_landmark,
                     "score": 1.0
                 })
-    with open(output_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["key", "coord_x", "coord_y", "coord_z", "class", "score"])
-        writer.writeheader()
-        writer.writerows(rows)
-    print(f"Metrics written to {output_path}")
+    if write_single: write_rows(rows, output_path)
+    return rows
 
+def get_normal_smooth_vector(mesh:trimesh.Trimesh, bracket:np.ndarray, vertices:np.ndarray, scaling:float) -> np.ndarray:
+    bracket_mm = bracket / scaling  # Convert to mm space
+    vertices_mm = vertices / scaling  # Convert all vertices to mm space
+    # Find vertices within 1.5mm radius
+    distances = np.linalg.norm(vertices_mm - bracket_mm, axis=1)
+    nearby_indices = np.where(distances <= 1.5)[0]
+    # Average the vertex normals of nearby vertices
+    nearby_normals = mesh.vertex_normals[nearby_indices]
+    v_normal = np.mean(nearby_normals, axis=0)
+    v_normal = v_normal / np.linalg.norm(v_normal)
+    return v_normal
 
-def kpt_json_to_gold(json_path: str | Path, output_pickle: str | Path) -> dict:
-    """
-    Convert a landmark JSON file to the gold dictionary format, grouped by class.
-    Args:
-        json_path: path to the input .json file (e.g. '5JRH5J6E_lower__kpt.json')
-        output_pickle: path where the resulting pickle file will be saved
-    Returns:
-        gold dict in the format {class: {patient_id: [[x, y, z], ...]}}
-    """
-    json_path = Path(json_path)
-    patient_id = json_path.stem.replace("__kpt", "")  # e.g. '5JRH5J6E_lower'
-    with open(json_path, "r") as f: data = json.load(f)
-    gold = defaultdict(lambda: defaultdict(list))
-    for obj in data["objects"]:
-        gold[obj["class"]][patient_id].append(obj["coord"])
-    # Convert defaultdicts to plain dicts
-    gold = {cls: dict(patients) for cls, patients in gold.items()}
-    with open(output_pickle, "wb") as f:
-        pickle.dump(gold, f)
-    return gold
+def fit_plane(projected:dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    planar_pts = np.array(projected['Planar'])
+    center = np.mean(planar_pts, axis=0)
+    centered = planar_pts - center
+    # SVD to find best fit plane
+    U, S, Vt = np.linalg.svd(centered)
+    # Normal is the direction with smallest singular value
+    v_normal = Vt[2] / np.linalg.norm(Vt[2])
+    # Get two orthogonal vectors in the plane
+    v1 = Vt[0] / np.linalg.norm(Vt[0])
+    v2 = Vt[1] / np.linalg.norm(Vt[1])
+    v_io, v_perp = v1, v2
+    return v_normal, v_io, v_perp
+
+def get_io_perp(v_normal:np.ndarray, incisal:np.ndarray, outer:np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    v_io = outer - incisal
+    v_io = v_io / np.linalg.norm(v_io)
+    # Get perpendicular axis to define plane
+    v_perp = np.cross(v_normal, v_io)
+    v_perp = v_perp / np.linalg.norm(v_perp)
+    return v_io, v_perp

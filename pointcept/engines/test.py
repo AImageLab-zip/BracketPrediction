@@ -1888,8 +1888,13 @@ class HeatmapTesterV2(TesterBase):
                 f"MSE {mse:.6f} ({mse_meter.avg:.6f}) "
                 f"MAE {mae:.6f} ({mae_meter.avg:.6f})"
             )
-
-            mesh = trimesh.load(full_path, force="mesh")
+  
+            if hasattr(self.test_loader.dataset, 'custom_cache') and self.test_loader.dataset.custom_cache is not None:  
+                # Using cached dataloader - get mesh from cache  
+                mesh = self.test_loader.dataset.custom_cache.meshes[data_name]  
+            else:  
+                # Using regular dataloader - load from disk  
+                mesh = trimesh.load(full_path, force="mesh")
             verts = np.asarray(mesh.vertices)
 
             channels_proposals = {}
