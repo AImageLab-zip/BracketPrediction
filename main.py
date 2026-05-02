@@ -1,5 +1,7 @@
 import os
 import sys
+import uuid
+from datetime import datetime
 sys.path.append(os.path.abspath("application"))
 os.environ["VTK_OPENGL_HAS_EGL"] = "0"
 import argparse
@@ -9,17 +11,6 @@ import traceback
 import json
 import pickle
 from collections import defaultdict
-
-
-#TESTING_LOWER = "/homes/mlugli/BracketPrediction/Teeth3DS/splits/3DTeethland_debug/testing_lower.txt"
-#TESTING_UPPER = "/homes/mlugli/BracketPrediction/Teeth3DS/splits/3DTeethland_debug/testing_upper.txt"
-
-#TESTING_LOWER = '/homes/mlugli/BracketPrediction/Teeth3DS/splits/3DTeethland_challenge_train_test_split_original/testing_lower.txt'
-#TESTING_UPPER = '/homes/mlugli/BracketPrediction/Teeth3DS/splits/3DTeethland_challenge_train_test_split_original/testing_upper.txt'
-#TEETHLAND_DIR = '/homes/mlugli/BracketPrediction/Teeth3DS/original_data'
-DIR = '/work/grana_maxillo/Mlugli/T4M'
-TESTING = '/work/grana_maxillo/Mlugli/T4M/test.txt'
-
 from application.segment_scan import run_segmentation_with_model
 from application.bond import run_bond_with_model, postprocess_predictions
 from application.utils import load_model, teethland_output, write_rows
@@ -98,10 +89,14 @@ class LandmarksPredictor:
         except Exception as e:
             traceback.print_exc()
             return False, str(e)
+
+    def _clear_cache(self):
+        if self.cache:
+            self.cache.clear()
     
     def predict(self, directory:Path, clean_previous=True, postprocess=False):
         if clean_previous: self._clean_outputs(directory)
-        if cache: self.cache.clear()
+        self._clear_cache()
         ok, msg = self.run_segmentation(directory)
         if not ok:
             print("Segmentation failed {}".format(msg))
@@ -120,9 +115,6 @@ class LandmarksPredictor:
                 json_to_ply(directory / "output_reg" / "results" / "landmarks.json",
                             directory / "output_reg" / "results" / "landmarks.ply")
 
-                #json_to_ply(directory / "output_reg" / "results" / "projected_points_rotated.json",
-                #            directory / "output_reg" / "results" / "projected_points_rotated.ply")
-
 def _merge_gold(kpt_path: Path, merged_gold: dict):
     patient_id = kpt_path.stem.replace("__kpt", "")
     with open(kpt_path, "r") as f:
@@ -130,40 +122,70 @@ def _merge_gold(kpt_path: Path, merged_gold: dict):
     for obj in data["objects"]:
         merged_gold[obj["class"]][patient_id].append(obj["coord"])
 
-def test_3dteethland(dataset_path:Path, files:list[str], model:LandmarksPredictor):
+def test_3dteethland(dataset_path:Path, 
+                     files:list[str], 
+                     model:LandmarksPredictor, 
+                     output_folder:Path,
+                     collect_gt:bool=False):
     test_samples = set(files)
     rows = []
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    evaluation_id = uuid.uuid4().hex[:6]
+    exp_dir = output_folder / f"{timestamp}_{evaluation_id}"
+    os.makedirs(exp_dir, exist_ok=True)
+    shutil.copy(model.bond_config, exp_dir)
+    shutil.copy(model.seg_config, exp_dir)
+    # used to store the final GT file if collect_gt is true
     merged_gold = defaultdict(lambda: defaultdict(list))
     for arch in ["lower", "upper"]:
         dirpath = dataset_path / arch
         dirs = [d for d in os.listdir(dirpath) if os.path.isdir(dirpath / d)]
         for patient in dirs:
-            for ext in (".obj", ".stl"):
-                filepath = dirpath / patient / f"{patient}_{arch}{ext}"
-                if filepath.exists(): break
-            if filepath.exists() and  f"{patient}_{arch}" in test_samples:
-                model.predict(dirpath / patient, clean_previous=True, postprocess=True)
-                rows += teethland_output(dirpath / patient / "output_reg" / "results" / "landmarks.json")
+            base = dirpath / patient / f"{patient}_{arch}"
+            filepath = next((base.with_suffix(ext) for ext in (".obj", ".stl") if base.with_suffix(ext).exists()), None)
+            if not filepath or f"{patient}_{arch}" not in test_samples: continue
+            model.predict(dirpath / patient, clean_previous=True, postprocess=True)
+            rows += teethland_output(dirpath / patient / "output_reg" / "results" / "landmarks.json")
+            if collect_gt:
                 kpt_path = dirpath / patient / f"{patient}_{arch}__kpt.json"
-                if kpt_path.exists(): _merge_gold(kpt_path, merged_gold)
-    write_rows(rows, '/homes/mlugli/BracketPrediction/evaluation/our_predictions.csv')
-    final_gold = {cls: dict(patients) for cls, patients in merged_gold.items()}
-    output_pickle = Path('/homes/mlugli/BracketPrediction/evaluation/our_predictions_gold.pkl')
-    with open(output_pickle, "wb") as f: pickle.dump(final_gold, f)
+                if not kpt_path.exists():
+                    print(f"Can't collect GT file for sample {patient}_{arch}.")
+                    raise FileNotFoundError("Please disable --collect-gt.")
+                _merge_gold(kpt_path, merged_gold)
+    write_rows(rows, exp_dir / "predictions.csv")
+    if collect_gt:
+        final_gold = {cls: dict(patients) for cls, patients in merged_gold.items()}
+        output_pickle = Path(output_folder / "gold_standard.pkl")
+        with open(output_pickle, "wb") as f: pickle.dump(final_gold, f)
+
+def get_samples(L:list[Path]) -> list[str]:
+    all_samples = []
+    for file in L:
+        with open(file) as f:
+            samples = f.read().splitlines()
+            all_samples += samples
+    return all_samples
 
 parser = argparse.ArgumentParser(
     description="Segments and predicts landmarks on a oriented scan."
 )
 parser.add_argument("--debug",          action="store_true", help="Wait for debugger on port 5681")
+# ===================== DATA PATHS ========================
+parser.add_argument("--samples",        nargs="+", help="paths to files containing testing filenames")
+parser.add_argument("--data-folder",    help="Absolute path of the data folder")
+parser.add_argument("--output-folder",  help="Absolute path of the output folder where predictions will be saved.")
+# ============= MODEL WEIGHTS AND CONFIGS =================
 parser.add_argument("--seg-config",     required=True, help="Segmentation config file")
 parser.add_argument("--seg-weight",     required=True, help="Segmentation model weights")
 parser.add_argument("--bond-config",    required=True, help="Bond prediction config file")
 parser.add_argument("--bond-weight",    required=True, help="Bond prediction model weights")
+# ================== OPTIONALS =============================
 parser.add_argument("--remesh",         required=False, action="store_true", help="Enables remeshing of scans")
 parser.add_argument("--preprocessing",  required=False, help="Preprocessing")
 parser.add_argument("--vis-seg",        required=False, action="store_true", help="Renders the 3D segmentation")
 parser.add_argument("--save-ply",       required=False, action="store_true", help="Saves landmarks as point cloud")
 parser.add_argument("--cache",          required=False, action="store_true", help="Cache teeth meshes in memory")
+parser.add_argument("--collect-gt",     required=False, action="store_true", help="Looks for __kpt.json files and stores them in a pickle object.")
 
 args = parser.parse_args()
 if args.debug:
@@ -186,9 +208,10 @@ model = LandmarksPredictor(args.seg_config,
                            preprocessing=args.preprocessing
                            )
 
-#lower_files = open(TESTING_LOWER).read().splitlines()
-#upper_files = open(TESTING_UPPER).read().splitlines()
-#all_files = lower_files + upper_files
-all_files = open(TESTING).read().splitlines()
-test_3dteethland(Path(DIR), all_files, model)
+all_files = get_samples(args.samples)
+test_3dteethland(Path(args.data_folder), 
+                 all_files, 
+                 model, 
+                 Path(args.output_folder),
+                 collect_gt=args.collect_gt)
 timings.report()
