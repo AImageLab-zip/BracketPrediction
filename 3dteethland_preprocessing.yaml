@@ -1,3 +1,15 @@
+upper:
+  transforms:
+    - type: rotate
+      axis: [0, 0, 1]
+      angle_deg: 180
+
+lower:
+  transforms:
+    - type: rotate
+      axis: [0, 0, 1]
+      angle_deg: 180
+
 # scan_normalizer_config.yaml
 # ----------------------------
 # Configure the affine transform pipeline for upper and lower intra-oral scans.
@@ -10,32 +22,24 @@
 #   rotate     – axis-angle rotation (angle in degrees)
 #   scale      – uniform (scalar) or non-uniform (list of 3) scaling
 #   matrix     – arbitrary 4×4 row-major homogeneous matrix
- 
-upper:
-  transforms:
-    # 1. Centre the scan at the origin
-    # - type: translate
-    #   values: [-50.0, -30.0, -10.0]
- 
-    # 2. Align occlusal plane to XY by rotating around X-axis
-    - type: rotate
-      axis: [0, 1, 0]
-      angle_deg: 180
 
-    # 4. Isotropic scale to normalise to a canonical size
-    # - type: scale
-    #   values: 0.1
- 
-# lower:
-#   transforms:
-#     - type: rotate
-#       axis: [0, 0, 1]
-#       angle_deg: 180
-# 
-#    4. Optional: apply a precomputed 4×4 registration matrix
-#    - type: matrix
-#      values:
-#        - [1, 0, 0, 0]
-#        - [0, 1, 0, 0]
-#        - [0, 0, 1, 0]
-#        - [0, 0, 0, 1]
+#Centre the scan at the origin
+# - type: translate
+#   values: [-50.0, -30.0, -10.0]
+
+
+#Isotropic scale to normalise to a canonical size
+# - type: scale
+#   values: 0.1
+
+# - type: rotate
+#   axis: [0, 0, 1]
+#   angle_deg: 180
+#
+#Optional: apply a precomputed 4×4 registration matrix
+# - type: matrix
+#   values:
+#    - [1, 0, 0, 0]
+#    - [0, 1, 0, 0]
+#    - [0, 0, 1, 0]
+#    - [0, 0, 0, 1]

@@ -8,7 +8,7 @@ import argparse
 import json
 import pandas as pd
 import pickle
-from metrics import eval_map, voc_ar
+from metrics import eval_map, voc_ar, calculate_metrics_per_scan
 import numpy as np
 import debugpy
 
@@ -118,11 +118,71 @@ def main():
 
     with open(args.goldstandard_file, 'rb') as fp:
         gold = pickle.load(fp)
-
     scores = score(gold, pred_all_map)
     scores = reformat_scores(scores)
+
+    # Compute per-scan metrics to list worst-performing samples
+    # filter out NEW_LANDMARKS so per-scan calc doesn't KeyError
+    filtered_pred = pred_submission[~pred_submission['class'].isin(NEW_LANDMARKS)].reset_index(drop=True)
+    per_scan_metrics = calculate_metrics_per_scan(filtered_pred, gold)
+
+    # Helper to extract reformatted per-scan metric values
+    def compute_scan_metric(scan_metrics, metric_name):
+        # scan_metrics: {'mAP': {class: val...}, 'mAR': {...}}
+        if metric_name.startswith('AP_'):
+            if metric_name == 'AP_cusp':
+                return scan_metrics['mAP']['Cusp']
+            if metric_name == 'AP_mesial_distal':
+                return (scan_metrics['mAP']['Mesial'] + scan_metrics['mAP']['Distal']) / 2
+            if metric_name == 'AP_inner_outer':
+                return (scan_metrics['mAP']['InnerPoint'] + scan_metrics['mAP']['OuterPoint']) / 2
+            if metric_name == 'AP_facial':
+                return scan_metrics['mAP']['FacialPoint']
+            if metric_name == 'AP_mAP':
+                vals = list(scan_metrics['mAP'].values())
+                return sum(vals) / len(vals)
+        if metric_name.startswith('AR_'):
+            if metric_name == 'AR_cusp':
+                return scan_metrics['mAR']['Cusp']
+            if metric_name == 'AR_mesial_distal':
+                return (scan_metrics['mAR']['Mesial'] + scan_metrics['mAR']['Distal']) / 2
+            if metric_name == 'AR_inner_outer':
+                return (scan_metrics['mAR']['InnerPoint'] + scan_metrics['mAR']['OuterPoint']) / 2
+            if metric_name == 'AR_facial':
+                return scan_metrics['mAR']['FacialPoint']
+            if metric_name == 'AR_mAR':
+                vals = list(scan_metrics['mAR'].values())
+                return sum(vals) / len(vals)
+        return None
+
+    metric_keys = [
+        'AP_cusp', 'AP_mesial_distal', 'AP_inner_outer', 'AP_facial', 'AP_mAP',
+        'AR_cusp', 'AR_mesial_distal', 'AR_inner_outer', 'AR_facial', 'AR_mAR'
+    ]
+
+    worst_samples = {}
+    for mk in metric_keys:
+        scores_list = []
+        for scan, scan_metrics in per_scan_metrics.items():
+            val = compute_scan_metric(scan_metrics, mk)
+            if val is None:
+                continue
+            scores_list.append((scan, float(val)))
+        # sort ascending -> worst first
+        scores_list.sort(key=lambda x: x[1])
+        worst5 = [{'scan': s, 'score': v} for s, v in scores_list[:5]]
+        worst_samples[mk] = worst5
+
+    # Print worst samples summary
+    print('\nWorst 5 samples per metric:')
+    for mk, items in worst_samples.items():
+        print(f"\n{mk}:")
+        for it in items:
+            print(f"  {it['scan']}: {it['score']:.6f}")
+
+    # Write results including worst samples
     with open(args.output, "w") as out:
-        res = {"submission_status": "SCORED", **scores}
+        res = {"submission_status": "SCORED", **scores, "worst_samples": worst_samples}
         out.write(json.dumps(res, indent=4))
 
 

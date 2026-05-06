@@ -1,0 +1,235 @@
+{
+    "submission_status": "SCORED",
+    "AP_cusp": 0.6481621939595084,
+    "AP_mesial_distal": 0.7245022782413686,
+    "AP_inner_outer": 0.7076094301012792,
+    "AP_facial": 0.7051590962599313,
+    "mAP": 0.702924117817456,
+    "AR_cusp": 0.579235561860609,
+    "AR_mesial_distal": 0.590729092370234,
+    "AR_inner_outer": 0.5962121287131098,
+    "AR_facial": 0.5662790606608654,
+    "mAR": 0.586566177448027,
+    "worst_samples": {
+        "AP_cusp": [
+            {
+                "scan": "EXS8T3FT_upper",
+                "score": 0.3463375834523531
+            },
+            {
+                "scan": "IO8HN7R6_lower",
+                "score": 0.42999861428934666
+            },
+            {
+                "scan": "GQVB6SDM_lower",
+                "score": 0.4821181561996778
+            },
+            {
+                "scan": "HJ6KHV47_upper",
+                "score": 0.5011362050456255
+            },
+            {
+                "scan": "PJMBC3TB_lower",
+                "score": 0.5256383285768591
+            }
+        ],
+        "AP_mesial_distal": [
+            {
+                "scan": "3TROMS4N_lower",
+                "score": 0.5836590608465608
+            },
+            {
+                "scan": "DRCZLIQA_lower",
+                "score": 0.5875928213016125
+            },
+            {
+                "scan": "IO8HN7R6_upper",
+                "score": 0.6119350688993546
+            },
+            {
+                "scan": "EXS8T3FT_upper",
+                "score": 0.6316781234638378
+            },
+            {
+                "scan": "XDKV81OZ_lower",
+                "score": 0.6333867521367522
+            }
+        ],
+        "AP_inner_outer": [
+            {
+                "scan": "DRCZLIQA_lower",
+                "score": 0.5085753989600144
+            },
+            {
+                "scan": "LCHRWF8N_lower",
+                "score": 0.5237094757094757
+            },
+            {
+                "scan": "3TROMS4N_lower",
+                "score": 0.5789489638447973
+            },
+            {
+                "scan": "POGIF0CR_lower",
+                "score": 0.5828633557800225
+            },
+            {
+                "scan": "G0CBNJGZ_lower",
+                "score": 0.5956594001236857
+            }
+        ],
+        "AP_facial": [
+            {
+                "scan": "FTNZTJHB_upper",
+                "score": 0.4287215099715098
+            },
+            {
+                "scan": "POGIF0CR_lower",
+                "score": 0.4428409090909089
+            },
+            {
+                "scan": "G0CBNJGZ_lower",
+                "score": 0.45706872492586764
+            },
+            {
+                "scan": "G0CBNJGZ_upper",
+                "score": 0.4576777719634863
+            },
+            {
+                "scan": "3PBLPI5H_lower",
+                "score": 0.47175925925925905
+            }
+        ],
+        "AP_mAP": [
+            {
+                "scan": "DRCZLIQA_lower",
+                "score": 0.588175449879487
+            },
+            {
+                "scan": "POGIF0CR_lower",
+                "score": 0.6050172697479703
+            },
+            {
+                "scan": "G0CBNJGZ_upper",
+                "score": 0.608709930203132
+            },
+            {
+                "scan": "3TROMS4N_lower",
+                "score": 0.6118005195905524
+            },
+            {
+                "scan": "IO8HN7R6_upper",
+                "score": 0.6159633248101969
+            }
+        ],
+        "AR_cusp": [
+            {
+                "scan": "EXS8T3FT_upper",
+                "score": 0.3342098237163788
+            },
+            {
+                "scan": "DINKGROB_upper",
+                "score": 0.3912614758181502
+            },
+            {
+                "scan": "IO8HN7R6_lower",
+                "score": 0.42120994590426136
+            },
+            {
+                "scan": "3IAO5RVQ_upper",
+                "score": 0.4220068635668428
+            },
+            {
+                "scan": "PJMBC3TB_lower",
+                "score": 0.43771024200993425
+            }
+        ],
+        "AR_mesial_distal": [
+            {
+                "scan": "DRCZLIQA_lower",
+                "score": 0.4464841039555042
+            },
+            {
+                "scan": "LCHRWF8N_lower",
+                "score": 0.4805785785960189
+            },
+            {
+                "scan": "IO8HN7R6_upper",
+                "score": 0.4856649747501618
+            },
+            {
+                "scan": "3TROMS4N_lower",
+                "score": 0.49397863916960827
+            },
+            {
+                "scan": "EXS8T3FT_upper",
+                "score": 0.5032971170153594
+            }
+        ],
+        "AR_inner_outer": [
+            {
+                "scan": "LCHRWF8N_lower",
+                "score": 0.44037751465354613
+            },
+            {
+                "scan": "DRCZLIQA_lower",
+                "score": 0.45867066748740953
+            },
+            {
+                "scan": "G0CBNJGZ_upper",
+                "score": 0.48006312111738925
+            },
+            {
+                "scan": "PJMBC3TB_upper",
+                "score": 0.4946865492195666
+            },
+            {
+                "scan": "POGIF0CR_lower",
+                "score": 0.49779873977738076
+            }
+        ],
+        "AR_facial": [
+            {
+                "scan": "XQF3UEIP_lower",
+                "score": 0.3339043805368041
+            },
+            {
+                "scan": "G0CBNJGZ_upper",
+                "score": 0.3527319155113608
+            },
+            {
+                "scan": "FTNZTJHB_upper",
+                "score": 0.36788354313292804
+            },
+            {
+                "scan": "POGIF0CR_lower",
+                "score": 0.39303233784481467
+            },
+            {
+                "scan": "G0CBNJGZ_lower",
+                "score": 0.394734292497477
+            }
+        ],
+        "AR_mAR": [
+            {
+                "scan": "DRCZLIQA_lower",
+                "score": 0.4680841319549111
+            },
+            {
+                "scan": "G0CBNJGZ_upper",
+                "score": 0.4767611581925892
+            },
+            {
+                "scan": "IO8HN7R6_upper",
+                "score": 0.4879317881010168
+            },
+            {
+                "scan": "3TROMS4N_lower",
+                "score": 0.4945732383034908
+            },
+            {
+                "scan": "LCHRWF8N_lower",
+                "score": 0.5010614539662
+            }
+        ]
+    }
+}

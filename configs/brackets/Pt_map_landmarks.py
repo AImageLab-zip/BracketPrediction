@@ -24,10 +24,10 @@ wandb_project = "bracket_point_prediction"
 # Model settings
 # ----------------------------- 
 model = dict(    
-    type="LandmarksHeatmapV2",    
-    backbone=dict(    
-        type="PT-v3m1",    
-        in_channels=3,  # xyz only  
+    type="LandmarksHeatmapV2",
+    backbone=dict(
+        type="PT-v3m1",
+        in_channels=3,  # xyz only
         enc_depths=(2, 2, 2, 6, 2),
         enc_channels=(32, 64, 128, 256, 512),
         enc_num_head=(2, 4, 8, 16, 32),
@@ -39,8 +39,9 @@ model = dict(
         cls_mode=False,
     ),    
     backbone_out_channels=64,
+    loss_type = "softdice",
 )
-  
+
 # -----------------------------  
 # Optimizer & Scheduler
 # -----------------------------  

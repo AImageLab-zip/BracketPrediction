@@ -152,7 +152,7 @@ class TesterBase:
             test_dataset,
             batch_size=self.cfg.batch_size_test_per_gpu,
             shuffle=False,
-            num_workers=self.cfg.batch_size_test_per_gpu,
+            num_workers=self.cfg.num_worker_per_gpu,
             pin_memory=True,
             sampler=test_sampler,
             collate_fn=self.__class__.collate_fn,
@@ -1603,15 +1603,6 @@ class HeatmapTester(TesterBase):
             mesh = trimesh.load(full_path, force="mesh")
             verts = np.asarray(mesh.vertices)
             channels_proposals = {}
-            # need to activate this if in production, for now it's always active
-            #bm = BracketMapper()
-            #orientation_map = bm.get_sim_values(full_path, mesh, save=False)
-            #bm.plot_mesh(full_path, orientation_map)
-            # ============== load orientation map ==================
-            #full_path_p = Path(full_path)
-            #orientation_map_p = full_path_p.with_name(full_path_p.stem + "_orient.npy")
-            #orientation_map = np.load(orientation_map_p)
-            # ======================================================
             for channel_idx in range(3):
                 channel_pred = pred[:, channel_idx] 
                 #channel_pred = channel_pred * orientation_map
@@ -1671,9 +1662,12 @@ class HeatmapTesterV2(TesterBase):
     VARIABLE_POINT_CHANNELS = { # variable cusps
         6: "Cusp",
     }
+    def __init__(self, percentile=95, **kwargs):
+        super().__init__ (**kwargs)
+        self.percentile = percentile
 
-    def _extract_single_point_proposal(self, verts, channel_pred, percentile=95):
-        thresh = np.percentile(channel_pred, percentile)
+    def _extract_single_point_proposal(self, verts, channel_pred):
+        thresh = np.percentile(channel_pred, self.percentile)
         inds = np.nonzero(channel_pred >= thresh)[0]
 
         if inds.size == 0:
@@ -1694,8 +1688,8 @@ class HeatmapTesterV2(TesterBase):
 
         return local_verts[nearest_idx]
 
-    def _extract_multi_point_proposal(self, verts, channel_pred, k, percentile=95):
-        thresh = np.percentile(channel_pred, percentile)
+    def _extract_multi_point_proposal(self, verts, channel_pred, k):
+        thresh = np.percentile(channel_pred, self.percentile)
         inds = np.nonzero(channel_pred >= thresh)[0]
 
         if inds.size < k:
@@ -1733,9 +1727,9 @@ class HeatmapTesterV2(TesterBase):
         # step 3: clamp to range [2,6] since we can't have less or more cusps
         return int(np.clip(n_components, min_k, max_k))
 
-    def _extract_variable_point_proposal(self, mesh, channel_pred, min_k=2, max_k=6, percentile=95):
+    def _extract_variable_point_proposal(self, mesh, channel_pred, min_k=2, max_k=6):
         verts = np.asarray(mesh.vertices)
-        thresh = np.percentile(channel_pred, percentile)
+        thresh = np.percentile(channel_pred, self.percentile)
         inds = np.nonzero(channel_pred >= thresh)[0]
         # 1. get the number of clusters by building a graph and count the number of connected components
         k = self._get_num_clusters_from_components(mesh, inds, min_k, max_k)
@@ -1759,7 +1753,6 @@ class HeatmapTesterV2(TesterBase):
         return proposals
 
     def _swap_mesial_distal(self, channels_proposals):
-        
         # take the nearest vertex to each cluster center as a proposal
         channels_proposals['Mesial'], channels_proposals['Distal'] = channels_proposals['Distal'], channels_proposals['Mesial']
 

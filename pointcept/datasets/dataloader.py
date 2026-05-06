@@ -67,7 +67,7 @@ class MultiDatasetDataloader:
                     dataset,
                     batch_size=batch_size_per_gpu,
                     shuffle=(sampler is None),
-                    num_workers=num_worker_per_gpu,
+                    num_workers=num_workers,
                     sampler=sampler,
                     collate_fn=partial(point_collate_fn, mix_prob=mix_prob),
                     pin_memory=True,

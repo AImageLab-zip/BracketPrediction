@@ -24,9 +24,9 @@ export PYTHONPATH=./
 
 # Configuration
 CONFIG="configs/brackets/Pt_map_landmarks.py"
-EXP_NAME="landmarks_f0_normalized"
+EXP_NAME="3dteethland_1_softdice"
 NUM_GPU=1
-FOLD=0
+FOLD=42
 
 # Training command
 python tools/train.py \

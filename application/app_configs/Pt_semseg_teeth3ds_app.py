@@ -16,8 +16,8 @@ _base_ = ["default_runtime.py"]
 # -----------------------------  
 num_classes = 17 # 16 FDI Indices + Gum
 ignore_index = -1
-
-batch_size = 16
+num_worker = 0
+batch_size = 1
 mix_prob = 0
 empty_cache = False
 enable_amp = True
@@ -69,13 +69,21 @@ data = dict(
     ],
     train=dict(),
     val=dict(),
-    test=dict(    
+    test=dict(
         type=dataset_type,
         split="train test",
         ignore_index = ignore_index,
         load_segment = False,
         transform=[
             dict(type="NormalizeCoord"),
+            dict(type="Copy", keys_dict={"segment": "origin_segment"}),  # Add this  
+            dict(  
+                type="GridSample",  
+                grid_size=grid_size,  
+                hash_type="fnv",  
+                mode="train",  
+                return_inverse=True,  # This enables upsampling  
+            ),
         ],
         test_mode=True,
         preprocessing = '/homes/mlugli/BracketPrediction/3dteethland_preprocessing.yaml',
@@ -86,12 +94,13 @@ data = dict(
                 hash_type="fnv",
                 mode="test",
                 return_grid_coord=True,
+                return_inverse = True,
             ),
             crop=None,
             post_transform=[
                 dict(type="ToTensor"),
-                dict(type="Collect", keys=("coord", "grid_coord", "index"), feat_keys=feat_keys),
-            ],  
+                dict(type="Collect", keys=("coord", "grid_coord", "index", "inverse"), feat_keys=feat_keys),
+            ],
             aug_transform=[
                 [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)]
             ],
@@ -102,12 +111,12 @@ data = dict(
 # Hooks
 # -----------------------------
 hooks = [
-    dict(type="CheckpointLoader"),  
-    dict(type="ModelHook"),  
-    dict(type="IterationTimer", warmup_iter=2),  
-    dict(type="InformationWriter"),  
-    dict(type="SemSegEvaluator"),  
-    dict(type="CheckpointSaver", save_freq=None),  
-    dict(type="PreciseEvaluator", test_last=False),  
+    dict(type="CheckpointLoader"),
+    dict(type="ModelHook"),
+    dict(type="IterationTimer", warmup_iter=2),
+    dict(type="InformationWriter"),
+    dict(type="SemSegEvaluator"),
+    dict(type="CheckpointSaver", save_freq=None),
+    dict(type="PreciseEvaluator", test_last=False),
 ]
 test = dict(type="SemSegTester")

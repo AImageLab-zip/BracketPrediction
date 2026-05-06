@@ -48,7 +48,6 @@ class BracketsV2(DefaultDataset):
             self.aug_transform = [Compose(aug) for aug in test_cfg.aug_transform]
  
     def get_data_list(self):
-
         if self.fold is None:
             # Load all STL files from the data root
             file_names = []

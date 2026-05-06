@@ -7,8 +7,8 @@ _base_ = ["default_runtime.py"]
 # -----------------------------  
 # Misc settings
 # -----------------------------  
-batch_size = 16
-num_worker = 4
+batch_size = 1
+num_worker = 0
 mix_prob = 0
 empty_cache = False
 enable_amp = True
@@ -78,18 +78,19 @@ data = dict(
     ),
 )  
  
-# -----------------------------  
-# Hooks  
-# -----------------------------  
-hooks = [  
+# -----------------------------
+# Hooks
+# -----------------------------
+hooks = [
     dict(type="CheckpointLoader"),
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter"),
     dict(type="HeatmapEvaluatorV2"),
     dict(type="CheckpointSaver", save_freq=None),
-]  
-  
-test = dict(  
+]
+ 
+test = dict(
     type="HeatmapTesterV2",
+    percentile=97,
     verbose=True
 )

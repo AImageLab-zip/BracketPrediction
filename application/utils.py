@@ -40,7 +40,7 @@ def save_remeshed(mesh, filepath:Path):
 
 def is_consistent(vertices:np.ndarray, mask:np.ndarray):
     if len(mask) != len(vertices):
-        print(f"Warning: Mask length ({len(mask)}) doesn't match points ({len(vertices)})")
+        print(f"Error: Mask length ({len(mask)}) doesn't match points ({len(vertices)})")
         return False
     return True
 
