@@ -53,12 +53,15 @@ def score(gt_all, pred_all_map):
         for class_name in class_values.keys():
             class_values[class_name].append(threshold[class_name])
 
-    # Calculate the mean for each class
+    # Calculate mean AP per class across thresholds
     map = {class_name: sum(values) / len(values) for class_name, values in class_values.items()}
+
+    # Calculate AR per class
     mar = {}
     for cat in recall.keys():
         ar = voc_ar(np.exp(-np.asarray(dist_thresh_list)), recall, cat)
         mar[cat] = ar
+
     all_metrics = {"AP": map, "AR": mar}
     return all_metrics
 
@@ -160,6 +163,17 @@ def main():
         'AR_cusp', 'AR_mesial_distal', 'AR_inner_outer', 'AR_facial', 'AR_mAR'
     ]
 
+    std_scores = {}
+    for mk in metric_keys:
+        vals = []
+        for _, scan_metrics in per_scan_metrics.items():
+            val = compute_scan_metric(scan_metrics, mk)
+            if val is not None:
+                vals.append(float(val))
+        if vals:
+            out_name = mk.replace('AP_', 'std_AP_').replace('AR_', 'std_AR_')
+            std_scores[out_name] = float(np.std(vals))
+
     worst_samples = {}
     for mk in metric_keys:
         scores_list = []
@@ -182,7 +196,7 @@ def main():
 
     # Write results including worst samples
     with open(args.output, "w") as out:
-        res = {"submission_status": "SCORED", **scores, "worst_samples": worst_samples}
+        res = {"submission_status": "SCORED", **scores, **std_scores, "worst_samples": worst_samples}
         out.write(json.dumps(res, indent=4))
 
 

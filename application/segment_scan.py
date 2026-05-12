@@ -274,7 +274,9 @@ def postprocess_segmentation(scan_file: Path,
     print(f"Postprocessing {scan_file.name}...")
     arch = "lower" if "lower" in scan_file.name else "upper"
     # Load mesh and mask
-    mesh = trimesh.load_mesh(str(scan_file), process=False)
+    mesh = cache.get_scan_mesh(scan_file) if cache else None
+    if mesh is None:
+        mesh = trimesh.load_mesh(str(scan_file), process=False)
     if preprocessor: mesh = preprocessor.apply(mesh, arch) 
     mesh.merge_vertices()
     mask = np.load(mask_file) 
@@ -343,6 +345,9 @@ def run_segmentation_with_model(cfg,
  
         # Set up configuration
         cfg = default_setup(cfg)
+        if cache:
+            cfg._cfg_dict["data"]["test"]["custom_cache"] = cache
+            cfg._cfg_dict["data"]["test"]["type"] = "IosDatasetTeeth3dsCached"
  
         # Build and run tester with cached model
         test_cfg = dict(cfg=cfg, model=model, **cfg.test)

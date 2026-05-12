@@ -10,7 +10,7 @@ python main.py \
     --seg-config  application/app_configs/Pt_semseg_teeth3ds_app.py \
     --seg-weight  application/app_weights/segmentator_best.pth \
     --bond-config application/app_configs/Pt_landmarks_app.py \
-    --bond-weight /homes/mlugli/BracketPrediction/exp_brackets/3dteethland_1_softdice/model/model_best.pth \
+    --bond-weight /homes/mlugli/BracketPrediction/exp_brackets/3dteethland_0/model/model_best.pth \
     --preprocessing /homes/mlugli/BracketPrediction/3dteethland_preprocessing.yaml \
     --collect-gt \
     --cache \

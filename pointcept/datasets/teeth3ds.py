@@ -209,3 +209,37 @@ class IosDatasetTeeth3ds(DefaultDataset):
     def __len__(self):
         if self.debug: return 2
         return len(self.data_list) * self.loop
+
+
+@DATASETS.register_module()
+class IosDatasetTeeth3dsCached(IosDatasetTeeth3ds):
+    """Teeth3DS inference dataset that serves scans from in-memory cache."""
+
+    def __init__(self, *args, custom_cache=None, **kwargs):
+        if custom_cache is None:
+            raise ValueError("IosDatasetTeeth3dsCached requires a cache parameter")
+        self.custom_cache = custom_cache
+        super().__init__(*args, **kwargs)
+
+    def get_data_list(self):
+        scan_names = list(self.custom_cache.scan_meshes.keys())
+        print(f"Loaded {len(scan_names)} samples from cache")
+        return scan_names
+
+    def _load_obj(self, obj_path):
+        arch = "lower" if "lower" in obj_path else "upper"
+        try:
+            cached_mesh = self.custom_cache.get_scan_mesh(Path(obj_path))
+            if cached_mesh is not None:
+                mesh = cached_mesh.copy()
+            elif Path(obj_path).suffix == ".stl":
+                mesh = trimesh.load(obj_path, force='mesh')
+            else:
+                mesh = trimesh.load_mesh(obj_path, process=False)
+
+            if self.preprocessing:
+                mesh = self.preprocessor.apply(mesh, arch)
+            return mesh.vertices.astype(np.float32), mesh.vertex_normals.astype(np.float32)
+        except Exception:
+            print(f"Couldn't load sample {obj_path}")
+            raise
