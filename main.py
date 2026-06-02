@@ -59,8 +59,7 @@ class LandmarksPredictor:
         self.save_ply = save_ply
         self.cache = cache
         self.preprocessing = preprocessing
-        if self.preprocessing:
-            self.preprocessor = ScanNormalizer(self.preprocessing)
+        self.preprocessor = ScanNormalizer(self.preprocessing)
         print("\n🔄 Loading models on GPU …")
         self.seg_cfg,  self.seg_model  = load_model(self.seg_config,  self.seg_weight)
         self.bond_cfg, self.bond_model = load_model(self.bond_config, self.bond_weight)
@@ -287,19 +286,3 @@ test_3dteethland_optimized(
     Path(args.output_folder),
     args.collect_gt)
 timings.report()
-
-
-
-
-# Copy outputs into experiment folder for persistence, then cleanup temp dir
-#try:
-#    for name in ("output_reg", "output_seg"):
-#        src = temp_dir / name
-#        dst = exp_dir / name
-#        if src.exists():
-#            if dst.exists():
-#                shutil.rmtree(dst)
-#            shutil.copytree(src, dst)
-#except Exception as e:
-#    print(f"⚠️ Could not copy output directories to {exp_dir}: {e}")
-#remove_temp_folder(temp_dir)

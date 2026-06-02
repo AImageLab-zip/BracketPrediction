@@ -147,12 +147,13 @@ class ScanNormalizer:
     JAW_KEYS = ("upper", "lower")
 
     def __init__(self, config_path: str | Path) -> None:
-        self.config_path = Path(config_path)
+        self.config_path = None if config_path is None else Path(config_path)
         self._matrices: dict[str, list[np.ndarray]] = {
             "upper": [],
             "lower": [],
         }
-        self._load_config()
+        if self.config_path is not None:
+            self._load_config()
 
     # ------------------------------------------------------------------
     # Config loading

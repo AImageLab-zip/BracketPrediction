@@ -12,10 +12,8 @@ python main.py \
     --bond-config application/app_configs/Pt_landmarks_app.py \
     --bond-weight /homes/mlugli/BracketPrediction/exp_brackets/3dteethland_0/model/model_best.pth \
     --preprocessing /homes/mlugli/BracketPrediction/3dteethland_preprocessing.yaml \
-    --collect-gt \
     --cache \
-#    --vis-seg \
-#    --save-ply \
+    --collect-gt \
 
 
 # /homes/mlugli/BracketPrediction/exp_brackets/3dteethland_0/model/model_best.pth

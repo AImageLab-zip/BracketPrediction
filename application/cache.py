@@ -53,7 +53,9 @@ class TeethCache:
         """Load a full scan mesh once and keep it in memory."""
         scan_name = scan_path.name
         if scan_name not in self.scan_meshes:
-            self.scan_meshes[scan_name] = trimesh.load_mesh(str(scan_path), process=False)
+            mesh = trimesh.load_mesh(str(scan_path), process=False)
+            mesh.merge_vertices()
+            self.scan_meshes[scan_name] = mesh
 
     def get_scan_mesh(self, scan_path: Path):
         """Get a preloaded scan mesh by filename, if available."""

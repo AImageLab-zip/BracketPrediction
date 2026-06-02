@@ -125,22 +125,11 @@ class IosDatasetTeeth3ds(DefaultDataset):
                 mesh = trimesh.load(obj_path, force='mesh')
             else:
                 mesh = trimesh.load_mesh(obj_path, process=False)
-            if self.preprocessing:
-                mesh = self.preprocessor.apply(mesh, arch)
+            if self.preprocessing: mesh = self.preprocessor.apply(mesh, arch)
             return mesh.vertices.astype(np.float32), mesh.vertex_normals.astype(np.float32)
         except Exception:
             print(f"Couldn't load sample {obj_path}")
             raise
-    #def _load_obj(self, obj_path):
-    #    """Load OBJ file using trimesh with process=False to preserve vertex order."""
-    #    arch = "lower" if "lower" in obj_path else "upper"
-    #    try:
-    #        mesh = trimesh.load_mesh(obj_path, process=False)
-    #        if self.preprocessing: mesh = self.preprocessor.apply(mesh, arch) 
-    #        return mesh.vertices.astype(np.float32), mesh.vertex_normals.astype(np.float32)
-    #    except Exception:
-    #        print(f"Couldn't load sample {obj_path}")
-    #        raise
 
     def _load_json(self, json_path):
         with open(json_path) as f:
@@ -230,15 +219,10 @@ class IosDatasetTeeth3dsCached(IosDatasetTeeth3ds):
         arch = "lower" if "lower" in obj_path else "upper"
         try:
             cached_mesh = self.custom_cache.get_scan_mesh(Path(obj_path))
-            if cached_mesh is not None:
-                mesh = cached_mesh.copy()
-            elif Path(obj_path).suffix == ".stl":
-                mesh = trimesh.load(obj_path, force='mesh')
-            else:
-                mesh = trimesh.load_mesh(obj_path, process=False)
-
-            if self.preprocessing:
-                mesh = self.preprocessor.apply(mesh, arch)
+            if cached_mesh is not None: mesh = cached_mesh.copy()
+            else: mesh = trimesh.load_mesh(obj_path, process=False)
+            if self.preprocessing: mesh = self.preprocessor.apply(mesh, arch)
+            mesh.merge_vertices()
             return mesh.vertices.astype(np.float32), mesh.vertex_normals.astype(np.float32)
         except Exception:
             print(f"Couldn't load sample {obj_path}")
