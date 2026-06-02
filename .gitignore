@@ -16,6 +16,7 @@ application/data
 application/data_debug
 application/app_weights
 application/app_data
+evaluation/OrtoPaper
 scripts/logs
 outputs/
 data/
