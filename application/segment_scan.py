@@ -340,6 +340,9 @@ def run_segmentation_with_model(cfg,
         cfg._cfg_dict["data_root"] = str(data_folder)
         cfg._cfg_dict["save_path"] = str(Path(data_folder) / "output_seg")
         cfg._cfg_dict["data"]["test"]["data_root"] = str(data_folder)
+        cfg._cfg_dict["data"]["test"]["preprocessing"] = (
+            str(preprocessor.config_path) if preprocessor and preprocessor.config_path else None
+        )
  
         os.makedirs(cfg.save_path, exist_ok=True)
  

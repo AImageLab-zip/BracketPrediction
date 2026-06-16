@@ -86,7 +86,7 @@ data = dict(
             ),
         ],
         test_mode=True,
-        preprocessing = '/homes/mlugli/BracketPrediction/3dteethland_preprocessing.yaml',
+        preprocessing=None,
         test_cfg=dict(
             voxelize=dict(
                 type="GridSample",
