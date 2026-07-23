@@ -17,8 +17,10 @@ python application/bond.py \
 import debugpy
 import os
 import json
+import threading
 import numpy as np
 import trimesh
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from pointcept.engines.defaults import (
     default_argument_parser,
@@ -32,8 +34,15 @@ from utils import *
 from cache import TeethCache
 from pointcept.datasets.preprocessing.autobonding.scan_normalizer import ScanNormalizer
 
+# matplotlib's pyplot state is process-global and not thread-safe; serialize
+# figure creation when process_tooth_predictions runs across worker threads.
+_VIZ_LOCK = threading.Lock()
+
 # ====== GLOBAL VARIABLES ======
 SINGLE_LANDMARKS = ['Bracket','Incisal', 'OuterPoint', 'Gingival','Mesial', 'Distal', 'InnerPoint', 'FacialPoint']
+MULTI_LANDMARKS = ['Planar', 'Cusp']
+# All landmark classes the heatmap tester can decode; valid values for --landmarks.
+ALL_LANDMARKS = SINGLE_LANDMARKS + MULTI_LANDMARKS
 MOLARS = [16,17,18,26,27,28,36,37,38,46,47,48]
 PREMOLARS = [14,15,24,25,34,35,44,45]
 # ==============================
@@ -169,7 +178,7 @@ def process_tooth_predictions(mesh,
     }
     
     # Add cusps for molars and premolars
-    if fdi in MOLARS or fdi in PREMOLARS and 'Cusp' in denormalized:
+    if (fdi in MOLARS or fdi in PREMOLARS) and 'Cusp' in denormalized:
         json_data["cusps"] = denormalized['Cusp']
     
     # Add planar for molars
@@ -186,24 +195,31 @@ def process_tooth_predictions(mesh,
         del plot_points['Cusp']
     if visualize:
         try:
-            plot_teeth(plot_points, v_io, v_perp, vertices, patient_id, fdi, output_dir)
+            with _VIZ_LOCK:
+                plot_teeth(plot_points, v_io, v_perp, vertices, patient_id, fdi, output_dir)
         except Exception as e:
             print(f"  ⚠️  Tooth visualization failed: {e}")
     return json_data
 
-def postprocess_predictions(data_folder:Path, 
-                            visualize:bool = True, 
+def postprocess_predictions(data_folder:Path,
+                            visualize:bool = True,
                             cache:TeethCache | None = None,
-                            preprocessor:ScanNormalizer | None = None):
+                            preprocessor:ScanNormalizer | None = None,
+                            workers: int = 1):
     """
     Post-processes predictions and creates visualizations.
-    
+
     Args:
         data_folder: Path to the data folder containing predictions
         visualize: toggles visualization
         cache: cache that stores single teeth mesh objects
         preprocessor: preprocessor that automatically handles scan normalization
-    """ 
+        workers: number of teeth to post-process concurrently, for both the
+            per-tooth coordinate-frame step and the rotate-back-to-scan step.
+            1 (default) processes teeth sequentially. Uses a thread pool, not
+            separate processes, so `cache` stays a single shared in-memory
+            store visible to every tooth.
+    """
     output_reg_path = data_folder / "output_reg" / "results"
     teeth_path = data_folder / "output_seg" / "teeth"
     viz_dir = data_folder /  "output_reg" / "plots"
@@ -211,12 +227,13 @@ def postprocess_predictions(data_folder:Path,
     pred_file = output_reg_path / "predictions.json"
     print(f"Loading predictions from: {pred_file.name}")
     with open(pred_file, 'r') as f: all_predictions = json.load(f)
-    print(f"Found predictions for {len(all_predictions)} teeth")    
-    all_points_data = {}
-    for tooth_key, predictions in all_predictions.items():
+    print(f"Found predictions for {len(all_predictions)} teeth")
+
+    def _process_one(item):
+        tooth_key, predictions = item
         arch, patient_id, fdi = parse_tooth(tooth_key)
         mesh = cache.load_mesh(teeth_path, tooth_key) if cache else trimesh.load_mesh(teeth_path / f"{tooth_key}.stl")
- 
+
         # Process single tooth predictions to
         # bring them back to normalized coordinates
         points_data = process_tooth_predictions(
@@ -230,8 +247,20 @@ def postprocess_predictions(data_folder:Path,
             visualize=visualize,
             cache=cache
         )
-        if points_data:
-            all_points_data[tooth_key] = points_data
+        return tooth_key, points_data
+
+    all_points_data = {}
+    if workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            results = executor.map(_process_one, all_predictions.items())
+            for tooth_key, points_data in results:
+                if points_data:
+                    all_points_data[tooth_key] = points_data
+    else:
+        for item in all_predictions.items():
+            tooth_key, points_data = _process_one(item)
+            if points_data:
+                all_points_data[tooth_key] = points_data
 
     # Save all points to a single JSON file
     # output_json_path = output_reg_path / "projected_points.json"
@@ -239,11 +268,11 @@ def postprocess_predictions(data_folder:Path,
     # print(f"\n💾 Saved all projected points to: {output_json_path}")
 
     # Rotate points to fit the original scan
-    # 1) Shift if the scan has been centered to origin 
+    # 1) Shift if the scan has been centered to origin
     # 2) Rotations
 
-    rotated_points = {}
-    for tooth_key, pdata in all_points_data.items():
+    def _rotate_one(item):
+        tooth_key, pdata = item
         arch, patient_id, fdi = parse_tooth(tooth_key)
         # Load shift
         shift = np.array([0.0, 0.0, 0.0])
@@ -275,7 +304,7 @@ def postprocess_predictions(data_folder:Path,
             # Add shift, then undo the YAML-configured scan rotations
             pts = preprocessor.apply_inverse(pts + shift, jaw=arch)
             rotated_scalar = {k: pts[i].tolist() for i, k in enumerate(valid_keys)}
-  
+
             rotated_entry = {
                 'incisal': rotated_scalar.get('incisal'),
                 'outer':   rotated_scalar.get('outer'),
@@ -293,24 +322,44 @@ def postprocess_predictions(data_folder:Path,
                 rotated_entry['cusps'] = transform_multipoint(pdata['cusps'], shift, arch, preprocessor)
             if fdi in MOLARS and pdata.get('planar'):
                 rotated_entry['planar'] = transform_multipoint(pdata['planar'], shift, arch, preprocessor)
-            rotated_points[tooth_key] = rotated_entry
+            return tooth_key, rotated_entry
         except Exception as e:
             print(f"⚠️ Error rotating points for {tooth_key}: {e}")
+            return tooth_key, None
+
+    rotated_points = {}
+    if workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            results = executor.map(_rotate_one, all_points_data.items())
+            for tooth_key, rotated_entry in results:
+                if rotated_entry is not None:
+                    rotated_points[tooth_key] = rotated_entry
+    else:
+        for item in all_points_data.items():
+            tooth_key, rotated_entry = _rotate_one(item)
+            if rotated_entry is not None:
+                rotated_points[tooth_key] = rotated_entry
 
     rotated_output_path = output_reg_path / "landmarks.json"
     with open(rotated_output_path, 'w') as f: json.dump(rotated_points, f, indent=4)
     print(f"\n💾 Saved rotated projected points to: {rotated_output_path}")
     print(f"\n✅ Post-processing complete.")
 
-def run_bond_with_model(cfg, model, data_folder: Path, cache:TeethCache | None = None) -> bool:
+def run_bond_with_model(cfg, model, data_folder: Path, cache:TeethCache | None = None,
+                         target_landmarks: list[str] | None = None) -> bool:
     """
     Run bond prediction with a pre-loaded model.
-    
+
     Args:
         cfg: Configuration object
         model: Pre-loaded bond prediction model
         data_folder: Path to data folder containing segmentation results
         cache: Optional TeethCache for mesh caching
+        target_landmarks: If given, restricts landmark decoding (and its k-means /
+            connected-components post-processing) to these classes (see ALL_LANDMARKS).
+            'Bracket', 'Incisal' and 'OuterPoint' are always decoded regardless, since
+            every landmark's basePlane is expressed relative to the coordinate frame
+            they define. None (default) decodes every landmark class.
     Returns:
         bool: True if successful, False otherwise
     """
@@ -335,7 +384,8 @@ def run_bond_with_model(cfg, model, data_folder: Path, cache:TeethCache | None =
         if cache:
             cfg._cfg_dict["data"]["test"]["custom_cache"] = cache
             cfg._cfg_dict["data"]["test"]["type"] = "BracketsV2Cached"
-        
+        cfg._cfg_dict["test"]["target_landmarks"] = target_landmarks
+
         # Build and run tester with cached model
         test_cfg = dict(cfg=cfg, model=model, **cfg.test)
         tester = TESTERS.build(test_cfg)

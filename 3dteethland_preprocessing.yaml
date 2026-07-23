@@ -1,3 +1,5 @@
+# for the 3dteethland dataset, we need two rotations of 180 degrees 
+# for both upper and lower scans around Z axis.
 upper:
   transforms:
     - type: rotate

@@ -642,6 +642,63 @@ class DisplacementEvaluator(HookBase):
             wandb.log(wandb_log_dict, step=wandb.run.step)
 
 
+@HOOKS.register_module()
+class OrientationEvaluator(HookBase):
+    def before_train(self):
+        if self.trainer.writer is not None and self.trainer.cfg.enable_wandb:
+            wandb.define_metric("val/*", step_metric="Epoch")
+
+    def after_epoch(self):
+        if self.trainer.cfg.evaluate:
+            self.eval()
+
+    def after_train(self):
+        best_loss = -self.trainer.best_metric_value
+        self.trainer.logger.info(f"Best orientation loss: {best_loss:.6f}")
+
+    def eval(self):
+        self.trainer.logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+        self.trainer.model.eval()
+        loss_sum = 0.0
+        recon_sum = 0.0
+        angle_sum = 0.0
+        count = 0
+        for input_dict in self.trainer.val_loader:
+            for key, value in input_dict.items():
+                if isinstance(value, torch.Tensor):
+                    input_dict[key] = value.cuda(non_blocking=True)
+            with torch.no_grad():
+                output = self.trainer.model(input_dict)
+            loss_sum += output["loss"].item()
+            recon_sum += output["recon_loss"].item()
+            angle_sum += output["angle_loss"].item()
+            count += 1
+        loss = loss_sum / max(count, 1)
+        recon_loss = recon_sum / max(count, 1)
+        angle_loss = angle_sum / max(count, 1)
+        self.trainer.logger.info(
+            f"Val result: loss/recon/angle {loss:.6f}/{recon_loss:.6f}/{angle_loss:.6f}"
+        )
+        current_epoch = self.trainer.epoch + 1
+        if self.trainer.writer is not None:
+            self.trainer.writer.add_scalar("val/loss", loss, current_epoch)
+            self.trainer.writer.add_scalar("val/recon_loss", recon_loss, current_epoch)
+            self.trainer.writer.add_scalar("val/angle_loss", angle_loss, current_epoch)
+            if self.trainer.cfg.enable_wandb:
+                wandb.log(
+                    {
+                        "Epoch": current_epoch,
+                        "val/loss": loss,
+                        "val/recon_loss": recon_loss,
+                        "val/angle_loss": angle_loss,
+                    },
+                    step=wandb.run.step,
+                )
+        self.trainer.comm_info["current_metric_value"] = -loss
+        self.trainer.comm_info["current_metric_name"] = "orientation_loss"
+        self.trainer.logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
+
+
 @HOOKS.register_module()  
 class HeatmapEvaluator(HookBase):  
     def __init__(self):  

@@ -29,3 +29,4 @@ from .brackets_map import BracketMapDataset
 from .brackets_semseg import IosDataset
 from .teeth3ds import IosDatasetTeeth3ds, IosDatasetTeeth3dsCached
 from .landmarks import BracketsV2, BracketsV2Cached
+from .ios_orientation import IOSOrientationDataset

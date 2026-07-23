@@ -6,7 +6,9 @@ so that tooth 48 is overlapped with lower's tooth 28.
 This rotation will be reversed later to go back to the original reference frame.
 """
 import os
+import threading
 import trimesh
+from concurrent.futures import ThreadPoolExecutor
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from pointcept.datasets.preprocessing.autobonding.scan_normalizer import ScanNormalizer
@@ -27,6 +29,10 @@ import json
 from scipy.spatial import cKDTree
 from application.utils import *
 from application.cache import TeethCache
+
+# matplotlib's pyplot state is process-global and not thread-safe; serialize
+# figure creation when postprocess_segmentation runs across worker threads.
+_VIZ_LOCK = threading.Lock()
 
 
 def normalize(points: np.ndarray, flip:bool=False) -> tuple[np.ndarray, np.ndarray, float]:
@@ -308,22 +314,25 @@ def postprocess_segmentation(scan_file: Path,
         dilate_and_save_teeth(remeshed_mask.squeeze(), points_remeshed, faces_remeshed, base_name, remeshed_teeth_output_dir, cache=cache)
 
     if visualize:
-        try: create_segmentation_visualization(mesh, cleaned_mask, scan_file.stem, output_dir)
+        try:
+            with _VIZ_LOCK:
+                create_segmentation_visualization(mesh, cleaned_mask, scan_file.stem, output_dir)
         except Exception as e: print(f"  ⚠️  Visualization failed (continuing anyway): {e}")
     # Get unique FDI indices from cleaned mask (excluding 0 which is gum)
     dilate_and_save_teeth(cleaned_mask, points, faces, base_name, teeth_output_dir, cache=cache)
 
 @timed
-def run_segmentation_with_model(cfg, 
-                                model, 
-                                data_folder: Path, 
-                                remesh=False, 
+def run_segmentation_with_model(cfg,
+                                model,
+                                data_folder: Path,
+                                remesh=False,
                                 visualize=False,
-                                cache:TeethCache = None, 
-                                preprocessor:ScanNormalizer | None = None) -> bool:
+                                cache:TeethCache = None,
+                                preprocessor:ScanNormalizer | None = None,
+                                workers: int = 1) -> bool:
     """
     Run segmentation with a pre-loaded model.
- 
+
     Args:
         cfg: Configuration object
         model: Pre-loaded segmentation model
@@ -332,6 +341,10 @@ def run_segmentation_with_model(cfg,
         visualize: set to true if you want to render the 3d segmentation
         teethland: must set to true if testing on 3dteethland original scans
         cache: Optional TeethCache for mesh caching
+        workers: number of scans to postprocess (mask cleanup + per-tooth mesh
+            splitting) concurrently. 1 (default) processes scans sequentially.
+            Uses a thread pool, not separate processes, so `cache` stays a
+            single shared in-memory store visible to every scan.
     Returns:
         bool: True if successful, False otherwise
     """
@@ -366,16 +379,25 @@ def run_segmentation_with_model(cfg,
  
         # Find STL files in data folder
         scans = list(data_folder.glob("*.stl")) + list(data_folder.glob("*.obj"))
-        for scan in scans:
+
+        def _postprocess_one(scan):
             mask_file = output_folder / "result" / f"{scan.stem}_pred.npy"
-            postprocess_segmentation(scan, 
-                mask_file, 
-                output_folder, 
-                remesh=remesh, 
+            postprocess_segmentation(scan,
+                mask_file,
+                output_folder,
+                remesh=remesh,
                 visualize=visualize,
                 cache=cache,
                 preprocessor=preprocessor)
- 
+
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                # list() drains the map so any worker exception is raised here.
+                list(executor.map(_postprocess_one, scans))
+        else:
+            for scan in scans:
+                _postprocess_one(scan)
+
         print("\n" + "="*80)
         print("Postprocessing complete!")
         print("="*80)

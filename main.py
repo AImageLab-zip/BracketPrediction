@@ -12,8 +12,9 @@ import traceback
 import json
 import pickle
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from application.segment_scan import run_segmentation_with_model
-from application.bond import run_bond_with_model, postprocess_predictions
+from application.bond import run_bond_with_model, postprocess_predictions, ALL_LANDMARKS
 from application.utils import load_model, teethland_output, write_rows
 from application.timing import *
 from application.cache import TeethCache
@@ -49,6 +50,8 @@ class LandmarksPredictor:
         save_ply: bool,
         cache: TeethCache | None = None,
         preprocessing = None,
+        landmarks: list[str] | None = None,
+        workers: int = 1,
     ):
         self.seg_config = Path(seg_config)
         self.seg_weight= Path(seg_weight)
@@ -59,6 +62,8 @@ class LandmarksPredictor:
         self.save_ply = save_ply
         self.cache = cache
         self.preprocessing = preprocessing
+        self.landmarks = landmarks
+        self.workers = workers
         self.preprocessor = ScanNormalizer(self.preprocessing)
         print("\n🔄 Loading models on GPU …")
         self.seg_cfg,  self.seg_model  = load_model(self.seg_config,  self.seg_weight)
@@ -75,13 +80,14 @@ class LandmarksPredictor:
         print(f"\n{'='*70}\n🦷 SEGMENTATION — {patient_dir.name}\n{'='*70}")
         try:
             ok = run_segmentation_with_model(
-                cfg=self.seg_cfg, 
-                model=self.seg_model, 
-                data_folder=patient_dir, 
+                cfg=self.seg_cfg,
+                model=self.seg_model,
+                data_folder=patient_dir,
                 remesh = self.remesh,
                 visualize=self.visualize_segmentation,
                 cache=self.cache,
-                preprocessor=self.preprocessor
+                preprocessor=self.preprocessor,
+                workers=self.workers,
             )
             msg = f"Segmentation {'completed' if ok else 'failed'} for {patient_dir.name}"
             return ok, msg
@@ -93,10 +99,11 @@ class LandmarksPredictor:
         print(f"\n{'='*70}\n📍 BOND PREDICTION — {patient_dir.name}\n{'='*70}")
         try:
             ok = run_bond_with_model(
-                cfg=self.bond_cfg, 
-                model=self.bond_model, 
+                cfg=self.bond_cfg,
+                model=self.bond_model,
                 data_folder=patient_dir,
                 cache=self.cache,
+                target_landmarks=self.landmarks,
             )
             msg = f"Bond prediction {'completed' if ok else 'failed'} for {patient_dir.name}"
             return ok, msg
@@ -120,10 +127,11 @@ class LandmarksPredictor:
             print("Bond prediction failed {}".format(msg))
             return
         if not postprocess: return
-        postprocess_predictions(directory, 
-            visualize=False, 
+        postprocess_predictions(directory,
+            visualize=False,
             cache=self.cache,
-            preprocessor=self.preprocessor)
+            preprocessor=self.preprocessor,
+            workers=self.workers)
         print("✅ Results saved")
         if self.save_ply:
             json_to_ply(directory / "output_reg" / "results" / "landmarks.json",
@@ -224,12 +232,22 @@ def test_3dteethland_optimized(
     print(f"Created temporary scans folder: {temp_dir}")
     merged_gold = defaultdict(lambda: defaultdict(list))
     print(f"Pre-loading scans...")
-    for _, filepath, kpt_path in _iter_patient_files(dataset_path, set(files), collect_gt):
+
+    def _preload_one(entry):
+        _, filepath, kpt_path = entry
         if model.cache:
-            model.cache.preload_scan_mesh(filepath)
+            model.cache.preload_scan_mesh(filepath)  # disk load + mesh cleanup, independent per scan
         (temp_dir / filepath.name).symlink_to(filepath)
         if kpt_path:
             _merge_gold(kpt_path, merged_gold)
+
+    entries = list(_iter_patient_files(dataset_path, set(files), collect_gt))
+    if model.workers > 1:
+        with ThreadPoolExecutor(max_workers=model.workers) as executor:
+            list(executor.map(_preload_one, entries))
+    else:
+        for entry in entries:
+            _preload_one(entry)
 
     _run_prediction_timed(model, temp_dir)
     rows = teethland_output(temp_dir / "output_reg" / "results" / "landmarks.json")
@@ -257,6 +275,18 @@ parser.add_argument("--vis-seg",        required=False, action="store_true", hel
 parser.add_argument("--save-ply",       required=False, action="store_true", help="Saves landmarks as point cloud")
 parser.add_argument("--cache",          required=False, action="store_true", help="Cache teeth meshes in memory")
 parser.add_argument("--collect-gt",     required=False, action="store_true", help="Looks for __kpt.json files and stores them in a pickle object.")
+parser.add_argument("--landmarks",      required=False, nargs="+", choices=ALL_LANDMARKS, default=None,
+                     help="Restrict landmark prediction/post-processing to these classes "
+                          "(default: all). Skips the k-means/connected-components decoding "
+                          "for unrequested classes, notably 'Planar' and 'Cusp'. "
+                          "'Bracket', 'Incisal' and 'OuterPoint' are always computed since "
+                          "every landmark's basePlane is defined relative to them.")
+parser.add_argument("--workers",        required=False, type=int, default=1,
+                     help="Number of worker threads for the CPU/IO-bound steps that don't run "
+                          "on the GPU: loading scans from disk, splitting a segmented scan into "
+                          "per-tooth meshes, and turning each tooth's predicted heatmap into "
+                          "final landmark coordinates. Does not affect model inference itself. "
+                          "Default: 1 (sequential).")
 
 args = parser.parse_args()
 if args.debug:
@@ -277,7 +307,9 @@ model = LandmarksPredictor(args.seg_config,
                             args.vis_seg,
                             args.save_ply,
                             cache=cache,
-                            preprocessing=args.preprocessing
+                            preprocessing=args.preprocessing,
+                            landmarks=args.landmarks,
+                            workers=args.workers,
                             )
 
 test_3dteethland_optimized(

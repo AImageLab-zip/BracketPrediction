@@ -1510,6 +1510,62 @@ class BracketTester_v2(TesterBase):
 
 
 @TESTERS.register_module()
+class IOSOrientationTester(TesterBase):
+    def test(self):
+        assert self.test_loader.batch_size == 1
+        self.logger.info(">>>>>>>>>>>>>>>> Start IOS Orientation Inference >>>>>>>>>>>>>>>>")
+        self.model.eval()
+        save_path = os.path.join(self.cfg.save_path, "orientation_results")
+        os.makedirs(save_path, exist_ok=True)
+        results = {}
+        errors = []
+
+        for data_dict in self.test_loader:
+            data_dict = data_dict[0]
+            fragment_list = data_dict.pop("fragment_list")
+            data_name = data_dict.pop("name")
+            target_angle = data_dict.pop("angle", None)
+            logits_sum = None
+
+            for fragment in fragment_list:
+                for key, value in fragment.items():
+                    if isinstance(value, torch.Tensor):
+                        fragment[key] = value.cuda(non_blocking=True)
+                with torch.no_grad():
+                    output = self.model(fragment)
+                    logits_sum = output["angle_logits"] if logits_sum is None else logits_sum + output["angle_logits"]
+
+            logits = logits_sum / len(fragment_list)
+            angle = torch.argmax(logits, dim=-1).to(logits.dtype) + self.model.angle_min_deg
+            matrix = self.model._matrix_from_angles(angle).squeeze(0).cpu().numpy()
+            pred = angle.squeeze(0).cpu().numpy()
+            results[data_name] = {"angle": pred.tolist(), "transform": matrix.tolist()}
+            np.save(os.path.join(save_path, f"{data_name}_angle.npy"), pred)
+            np.save(os.path.join(save_path, f"{data_name}_transform.npy"), matrix)
+
+            if target_angle is not None:
+                target = np.asarray(target_angle, dtype=np.int64).reshape(3) + 1
+                error = float(np.mean(np.abs(pred - target)))
+                errors.append(error)
+                self.logger.info(f"Test: {data_name}, angle MAE: {error:.6f}")
+            else:
+                self.logger.info(f"Test: {data_name}")
+
+        with open(os.path.join(save_path, "transforms.json"), "w") as f:
+            json.dump(results, f, indent=4)
+        if errors:
+            summary = {"mean_angle_mae": float(np.mean(errors)), "num_samples": len(errors)}
+            with open(os.path.join(save_path, "summary.json"), "w") as f:
+                json.dump(summary, f, indent=4)
+            self.logger.info(f"Mean angle MAE: {summary['mean_angle_mae']:.6f}")
+        self.logger.info("<<<<<<<<<<<<<<<<< End IOS Orientation Inference <<<<<<<<<<<<<<<<<")
+
+    @staticmethod
+    def collate_fn(batch):
+        return batch
+
+
+@TESTERS.register_module()
 class HeatmapTester(TesterBase):
     def test(self):
         assert self.test_loader.batch_size == 1    
@@ -1662,9 +1718,20 @@ class HeatmapTesterV2(TesterBase):
     VARIABLE_POINT_CHANNELS = { # variable cusps
         6: "Cusp",
     }
-    def __init__(self, percentile=95, **kwargs):
+    # Always decoded regardless of target_landmarks: every landmark's basePlane
+    # is expressed relative to the coordinate frame these three anchor.
+    CORE_CHANNELS = {"Bracket", "Incisal", "OuterPoint"}
+
+    def __init__(self, percentile=95, target_landmarks=None, **kwargs):
         super().__init__ (**kwargs)
         self.percentile = percentile
+        self.target_landmarks = set(target_landmarks) if target_landmarks else None
+
+    def _wants(self, landmark_name: str) -> bool:
+        """Whether `landmark_name` should be decoded, honoring target_landmarks filtering."""
+        if self.target_landmarks is None or landmark_name in self.CORE_CHANNELS:
+            return True
+        return landmark_name in self.target_landmarks
 
     def _extract_single_point_proposal(self, verts, channel_pred):
         thresh = np.percentile(channel_pred, self.percentile)
@@ -1892,17 +1959,24 @@ class HeatmapTesterV2(TesterBase):
 
             channels_proposals = {}
             for channel_idx, landmark_name in self.SINGLE_POINT_CHANNELS.items():
+                if not self._wants(landmark_name):
+                    continue
                 channel_pred = pred[:, channel_idx]
                 proposal = self._extract_single_point_proposal(verts, channel_pred)
                 channels_proposals[landmark_name] = proposal.tolist()
 
-            self._mesial_distal_correction(channels_proposals, full_path)
+            if "Mesial" in channels_proposals and "Distal" in channels_proposals:
+                self._mesial_distal_correction(channels_proposals, full_path)
 
             for channel_idx, (landmark_name, k) in self.MULTI_POINT_CHANNELS.items():
+                if not self._wants(landmark_name):
+                    continue
                 channel_pred = pred[:, channel_idx]
                 channels_proposals[landmark_name] = self._extract_multi_point_proposal(verts, channel_pred, k)
 
             for channel_idx, landmark_name in self.VARIABLE_POINT_CHANNELS.items():
+                if not self._wants(landmark_name):
+                    continue
                 channel_pred = pred[:, channel_idx]
                 channels_proposals[landmark_name] = self._extract_variable_point_proposal(mesh, channel_pred)
 
