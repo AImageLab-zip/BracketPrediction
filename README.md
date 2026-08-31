@@ -44,21 +44,26 @@ tracking progress in `<data-root>/processing_status.json` and notifying the
 
 ### Expected input layout
 
-A patient folder is picked up once it contains either:
+A patient folder is picked up once it contains **raw scans** under
+`<patient_id>/raw_data/`:
 
-- **Raw scans**, under `<patient_id>/raw_data/`:
-  - `STEM_lower_<id>.stl`, `STEM_upper_<id>.stl` (case-insensitive `STEM_` prefix)
-  - `config_<id>.json` (case-insensitive `config_` prefix), containing a
-    `scanTransformMatrix` (16 floats, row-major 4×4).
+- `STEM_lower_<id>.stl`, `STEM_upper_<id>.stl` (case-insensitive `STEM_` prefix)
+- `config_<id>.json` (case-insensitive `config_` prefix), containing a
+  `scanTransformMatrix` (16 floats, row-major 4×4).
 
-  The monitor applies `scanTransformMatrix`, then a fixed 180°(Y) + 90°(X)
-  rotation (plus an extra 180°(Y) for the upper arch), centers the scan on its
-  centroid, and writes the result as `<patient_id>/STEM_<arch>_<id>.stl` plus
-  a `STEM_<arch>_<id>_shift.json` recording the centroid offset (needed to map
-  predictions back to the original scan later).
+`application/preprocessor.Preprocessor` applies **only** the per-patient
+`scanTransformMatrix` and writes `<patient_id>/STEM_<arch>_<id>.stl`. The fixed
+standard-orientation rotation — 180°(Y) + 90°(X), plus an extra 180°(Y) for the
+upper arch — lives in `production_preprocessing.yaml` (`PREPROCESSING` env var);
+it is applied by the segmentation dataset loader before inference and inverted by
+`postprocess_predictions` to map predictions back to the `scanTransformMatrix`
+frame. The scan is not re-centred — the segmentator normalises coordinates online
+and the landmark model works per normalised tooth, so absolute position is
+irrelevant.
 
-- **Already-oriented scans** dropped directly as `<patient_id>/*.stl` — the
-  raw-ingestion step above is skipped for these.
+A patient folder with loose `*.stl` files but no `raw_data/` is marked failed:
+all input must arrive through `raw_data/` so the orientation transform above
+applies consistently.
 
 Only new/unprocessed `.stl` files trigger work; files already recorded in
 `processing_status.json` (processed or failed) are skipped on later polls.
@@ -108,7 +113,7 @@ tuned without rebuilding:
 | `VIS_SEG`           | `--vis-seg`         | `false` | Also render `<scan>_segmentation_views.png`. |
 | `WORKERS`           | `--workers`         | `1`     | Thread pool size for CPU/IO-bound steps (disk I/O, per-tooth splitting, heatmap decoding). Does not affect GPU inference. |
 | `LANDMARKS`         | `--landmarks`       | (all)   | Space-separated subset, e.g. `LANDMARKS="Bracket Incisal Cusp"`. `Bracket`/`Incisal`/`OuterPoint` are always computed regardless. |
-| `PREPROCESSING`     | `--preprocessing`   | (unset) | Path to a YAML calibration file for a second, uniform per-arch transform applied on top of raw-scan ingestion (see `pointcept/datasets/preprocessing/autobonding/scan_normalizer.py`). Left unset in production — identity, i.e. the exact old-production math — unless a specific calibration is needed. |
+| `PREPROCESSING`     | `--preprocessing`   | `/workspace/production_preprocessing.yaml` | Per-arch scan-orientation transform, applied by the segmentation dataset loader and inverted by `postprocess_predictions` (format: `pointcept/datasets/preprocessing/autobonding/scan_normalizer.py`). The default carries the standard-orientation rotation the segmentator requires — override only with a YAML that still produces that orientation. |
 
 # On-the-fly / manual inference
 

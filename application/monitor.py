@@ -248,6 +248,25 @@ class ScanMonitor:
             print(f"  ℹ️  Nothing new to process for {patient_id}")
             return
 
+        # All input must arrive via raw_data/ + config_<id>.json: the standard
+        # orientation is now applied through production_preprocessing.yaml, which
+        # would mis-rotate a scan dropped straight in already oriented. Fail such
+        # patients explicitly rather than segmenting a mis-oriented scan.
+        if not (patient_dir / "raw_data").is_dir():
+            msg = (f"{patient_id}: loose STL(s) {todo} with no raw_data/ directory. "
+                   f"Provide raw_data/STEM_*.stl + config_<id>.json.")
+            print(f"❌ {msg}")
+            patient_status["processing_history"].append({
+                "started_at": datetime.now().isoformat(),
+                "status":     "failed",
+                "failed_at":  datetime.now().isoformat(),
+                "error":      "Missing raw_data/ directory",
+                "files":      todo,
+            })
+            patient_status["failed_files"] = list(set(patient_status["failed_files"]) | set(todo))
+            self.save_status(status)
+            return
+
         print(f"\n{'#'*70}")
         print(f"# Patient : {patient_id}")
         print(f"# Files   : {todo}")

@@ -47,17 +47,11 @@ MOLARS = [16,17,18,26,27,28,36,37,38,46,47,48]
 PREMOLARS = [14,15,24,25,34,35,44,45]
 # ==============================
 
-def transform_multipoint(points_list, shift, arch, preprocessor):
-    arr = np.array(points_list, dtype=float) + shift
+def transform_multipoint(points_list, arch, preprocessor):
+    """Map a list of points from the model's working frame back to the scan
+    frame by inverting the --preprocessing transform (identity if none)."""
+    arr = np.array(points_list, dtype=float)
     return preprocessor.apply_inverse(arr, jaw=arch).tolist()
-
-def build_rotation_matrix(seq) -> np.ndarray:
-    """Build a combined 4x4 rotation matrix from a sequence of (axis, degrees) tuples."""
-    AXIS_VECTORS = {'x': [1, 0, 0], 'y': [0, 1, 0], 'z': [0, 0, 1]}
-    R = np.eye(4)
-    for axis, degrees in seq:
-        R = trimesh.transformations.rotation_matrix(np.deg2rad(degrees), AXIS_VECTORS[axis]) @ R
-    return R
 
 
 def process_tooth_predictions(mesh, 
@@ -269,21 +263,14 @@ def postprocess_predictions(data_folder:Path,
     with open(output_json_path, "w") as f: json.dump(all_points_data, f, indent=4)
     print(f"\n💾 Saved all projected points to: {output_json_path}")
 
-    # Rotate points to fit the original scan
-    # 1) Shift if the scan has been centered to origin
-    # 2) Rotations
+    # Map every landmark from the model's working frame back to the scan frame
+    # by inverting the --preprocessing transform. For the production monitor
+    # that YAML carries the standard-orientation rotations (180Y / 90X / upper
+    # extra 180Y); apply_inverse is identity when no --preprocessing is given.
 
     def _rotate_one(item):
         tooth_key, pdata = item
         arch, patient_id, fdi = parse_tooth(tooth_key)
-        # Load shift
-        shift = np.array([0.0, 0.0, 0.0])
-        shift_file = data_folder / f"STEM_{arch}_{patient_id}_shift.json"
-        if shift_file.exists():
-            try: shift = np.array(load_json(shift_file).get('shift', [0.0, 0.0, 0.0]))
-            except Exception as e: print(f"  ⚠️ Could not load shift file {shift_file}: {e}")
-        else:
-            print(f"  ⚠️ Shift file does not exist for patient {patient_id}")
         try:
             # Collect all scalar points into one (N, 3) array for a single
             # batched apply_inverse call.
@@ -303,8 +290,8 @@ def postprocess_predictions(data_folder:Path,
             }
             valid_keys = [k for k, v in point_map.items() if v is not None]
             pts = np.array([point_map[k] for k in valid_keys], dtype=float)
-            # Add shift, then undo the YAML-configured scan rotations
-            pts = preprocessor.apply_inverse(pts + shift, jaw=arch)
+            # Undo the --preprocessing transform (identity if none given).
+            pts = preprocessor.apply_inverse(pts, jaw=arch)
             rotated_scalar = {k: pts[i].tolist() for i, k in enumerate(valid_keys)}
 
             rotated_entry = {
@@ -321,9 +308,9 @@ def postprocess_predictions(data_folder:Path,
                 if rotated_scalar.get(key):
                     rotated_entry[key] = rotated_scalar[key]
             if (fdi in MOLARS or fdi in PREMOLARS) and pdata.get('cusps'):
-                rotated_entry['cusps'] = transform_multipoint(pdata['cusps'], shift, arch, preprocessor)
+                rotated_entry['cusps'] = transform_multipoint(pdata['cusps'], arch, preprocessor)
             if fdi in MOLARS and pdata.get('planar'):
-                rotated_entry['planar'] = transform_multipoint(pdata['planar'], shift, arch, preprocessor)
+                rotated_entry['planar'] = transform_multipoint(pdata['planar'], arch, preprocessor)
             return tooth_key, rotated_entry
         except Exception as e:
             print(f"⚠️ Error rotating points for {tooth_key}: {e}")

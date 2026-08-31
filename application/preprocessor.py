@@ -45,40 +45,24 @@ class Preprocessor:
         # Reshape the flat list of 16 numbers into a 4x4 matrix
         scan_transform_matrix = np.array(config_data["scanTransformMatrix"]).reshape((4, 4))
         for raw_stl_path in raw_stl_files:
-            mesh = trimesh.load_mesh(raw_stl_path)
-            # Common rotations for both upper and lower scans
-            rot_y_180 = trimesh.transformations.rotation_matrix(angle=np.pi, direction=[0, 1, 0])
-            rot_x_90 = trimesh.transformations.rotation_matrix(angle=np.pi/2, direction=[1, 0, 0])
-            mesh.apply_transform(scan_transform_matrix)
-            mesh.apply_transform(rot_y_180)
-            mesh.apply_transform(rot_x_90)
-
-            if "upper" in raw_stl_path.name.lower():
-                # Additional rotation for the upper scan
-                # (The segmentator is trained to segment upper scans
-                # rotated so that tooth 48 is "overlapped" with tooth 28)
-                rot_y_180_extra = trimesh.transformations.rotation_matrix(angle=np.pi, direction=[0, 1, 0])
-                mesh.apply_transform(rot_y_180_extra)
-                output_filename = raw_stl_path.name
-                print(f"  Applied common rotations + extra 180deg Y-rot to {raw_stl_path.name}")
-
-            elif "lower" in raw_stl_path.name.lower():
-                output_filename = raw_stl_path.name
-                print(f"  Applied common rotations to {raw_stl_path.name}")
-            else:
+            name = raw_stl_path.name.lower()
+            if "upper" not in name and "lower" not in name:
                 print(f"  ⚠️ Skipping {raw_stl_path.name}: does not contain 'upper' or 'lower'")
                 continue
 
-            centroid = mesh.centroid
-            translation_matrix = trimesh.transformations.translation_matrix(-centroid)
-            mesh.apply_transform(translation_matrix)
+            # Apply only the per-patient scanTransformMatrix here. The fixed
+            # standard-orientation rotations (180 Y / 90 X / upper extra 180 Y)
+            # now live in production_preprocessing.yaml, applied by the
+            # segmentation dataset loader and inverted by
+            # bond.postprocess_predictions. No centre-of-mass shift: the
+            # segmentator re-centres online (NormalizeCoord) and the landmark
+            # model works per normalised tooth, so absolute position is
+            # irrelevant.
+            mesh = trimesh.load_mesh(raw_stl_path)
+            mesh.apply_transform(scan_transform_matrix)
 
-            # Save shif to file (so that it can be applied later to go back to original space.)
-            with open(patient_dir / str("{}_{}.json".format(raw_stl_path.stem, "shift")), "w") as shift_file: 
-                json.dump({"shift": list(centroid)}, shift_file)
-
-            output_path = patient_dir / output_filename
+            output_path = patient_dir / raw_stl_path.name
             mesh.export(output_path)
-            print(f"  ✅ Saved processed mesh to {output_path}")
+            print(f"  ✅ Saved scanTransformMatrix-aligned mesh to {output_path}")
 
         return True, all_raw_files

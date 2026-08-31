@@ -1,0 +1,38 @@
+# Production monitor scan-orientation transform.
+#
+# The segmentator expects intra-oral scans in the standard reference frame
+# (+Z toward the skull, +X to the patient's right, +Y outwards) with upper
+# scans additionally rotated 180 deg about Y so tooth 48 overlaps tooth 28.
+#
+# application/preprocessor.Preprocessor applies only the per-patient
+# scanTransformMatrix (from config_<id>.json) and then leaves the rest of the
+# orientation to this file. It is applied:
+#   - by the segmentation dataset loader before inference,
+#   - by segment_scan.postprocess_segmentation before the per-tooth split,
+#   - inverted by bond.postprocess_predictions to map predictions back to the
+#     scanTransformMatrix frame.
+#
+# Transforms are applied top-to-bottom; apply_inverse() replays them in reverse
+# with inverted matrices. Order here matches the old hard-coded sequence in
+# Preprocessor exactly (180 Y, then 90 X, then - upper only - another 180 Y).
+
+lower:
+  transforms:
+    - type: rotate
+      axis: [0, 1, 0]
+      angle_deg: 180
+    - type: rotate
+      axis: [1, 0, 0]
+      angle_deg: 90
+
+upper:
+  transforms:
+    - type: rotate
+      axis: [0, 1, 0]
+      angle_deg: 180
+    - type: rotate
+      axis: [1, 0, 0]
+      angle_deg: 90
+    - type: rotate
+      axis: [0, 1, 0]
+      angle_deg: 180
