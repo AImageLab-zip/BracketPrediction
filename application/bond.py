@@ -262,10 +262,12 @@ def postprocess_predictions(data_folder:Path,
             if points_data:
                 all_points_data[tooth_key] = points_data
 
-    # Save all points to a single JSON file
-    # output_json_path = output_reg_path / "projected_points.json"
-    # with open(output_json_path, "w") as f: json.dump(all_points_data, f, indent=4)
-    # print(f"\n💾 Saved all projected points to: {output_json_path}")
+    # Save all points to a single JSON file (pre-rotation, still in the
+    # segmentation working frame). Kept for backward compatibility with the
+    # old production naming; not consumed by anything in this codebase.
+    output_json_path = output_reg_path / "projected_points.json"
+    with open(output_json_path, "w") as f: json.dump(all_points_data, f, indent=4)
+    print(f"\n💾 Saved all projected points to: {output_json_path}")
 
     # Rotate points to fit the original scan
     # 1) Shift if the scan has been centered to origin
@@ -340,9 +342,16 @@ def postprocess_predictions(data_folder:Path,
             if rotated_entry is not None:
                 rotated_points[tooth_key] = rotated_entry
 
+    # Final result, written under both names: "landmarks.json" is the name
+    # used by every current entry point (main.py, infer.py); "projected_points_rotated.json"
+    # is kept alongside it, byte-for-byte identical, for full backward
+    # compatibility with anything still reading the old production filename
+    # (e.g. visualizers.plot_jaw).
     rotated_output_path = output_reg_path / "landmarks.json"
+    legacy_output_path = output_reg_path / "projected_points_rotated.json"
     with open(rotated_output_path, 'w') as f: json.dump(rotated_points, f, indent=4)
-    print(f"\n💾 Saved rotated projected points to: {rotated_output_path}")
+    with open(legacy_output_path, 'w') as f: json.dump(rotated_points, f, indent=4)
+    print(f"\n💾 Saved rotated projected points to: {rotated_output_path} (and legacy alias {legacy_output_path.name})")
     print(f"\n✅ Post-processing complete.")
 
 def run_bond_with_model(cfg, model, data_folder: Path, cache:TeethCache | None = None,

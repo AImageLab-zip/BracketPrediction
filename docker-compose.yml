@@ -9,10 +9,19 @@ services:
     volumes:
       - ./application/data:/workspace/application/data
       - ./application/data_debug:/workspace/application/data_debug
-      - ./run_monitor_map_new.sh:/workspace/run_monitor_map_new.sh
+      - ./run_monitor.sh:/workspace/run_monitor.sh
       - ./run_monitor_debug.sh:/workspace/run_monitor_debug.sh
     environment:
       - PYTHONPATH=/workspace
       - DISPLAY=:99
       - API_TOKEN=${API_TOKEN}
+      # --- application/monitor.py flags, see README.md for details ---
+      - CHECK_INTERVAL=${CHECK_INTERVAL:-5}
+      - REMESH=${REMESH:-false}
+      - CACHE=${CACHE:-false}
+      - SAVE_PLY=${SAVE_PLY:-false}
+      - VIS_SEG=${VIS_SEG:-false}
+      - WORKERS=${WORKERS:-1}
+      - LANDMARKS=${LANDMARKS:-}
+      - PREPROCESSING=${PREPROCESSING:-}
     command: bash /workspace/run_monitor.sh

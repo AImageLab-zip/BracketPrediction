@@ -37,12 +37,10 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from application.segment_scan import run_segmentation_with_model
-from application.bond import run_bond_with_model, postprocess_predictions, ALL_LANDMARKS
-from application.utils import load_model
+from application.bond import ALL_LANDMARKS
 from application.cache import TeethCache
 from application.visualizers import json_to_ply
-from pointcept.datasets.preprocessing.autobonding.scan_normalizer import ScanNormalizer
+from application.pipeline import LandmarksPredictor
 
 SCAN_EXTENSIONS = {".stl", ".obj"}
 # Tooth-key parsing (application/utils.parse_tooth) expects a scan stem shaped
@@ -92,21 +90,27 @@ def internal_scan_name(scan: Path, unique_id: str | None = None) -> str:
 
 
 class InferencePipeline:
-    """Loads both models once and runs the full pipeline scan by scan."""
+    """Loads both models once (via the shared LandmarksPredictor engine) and
+    runs the full pipeline scan by scan."""
 
     def __init__(self, args):
-        self.cache = TeethCache()  # tooth meshes are always cached, never exported
-        self.preprocessor = ScanNormalizer(args.preprocessing)
-        self.vis_seg = args.vis_seg
-        self.landmarks = args.landmarks
-        self.save_ply = args.save_ply
+        self.engine = LandmarksPredictor(
+            args.seg_config, args.seg_weight, args.bond_config, args.bond_weight,
+            remesh=False,
+            visualize_segmentation=args.vis_seg,
+            save_ply=args.save_ply,
+            cache=TeethCache(),  # tooth meshes are always cached, never exported
+            preprocessing=args.preprocessing,
+            landmarks=args.landmarks,
+            workers=args.workers,
+        )
         self.workers = args.workers
         self.processing_time = 0.0  # cumulative segmentation + bond + postprocess time (excludes I/O)
         self.combined_landmarks: dict[str, dict] = {}  # tooth_key -> landmark data, flat like postprocess_predictions' own landmarks.json
-        print("\n🔄 Loading models on GPU …")
-        self.seg_cfg, self.seg_model = load_model(Path(args.seg_config), Path(args.seg_weight))
-        self.bond_cfg, self.bond_model = load_model(Path(args.bond_config), Path(args.bond_weight))
-        print("✅ Both models ready.\n")
+
+    @property
+    def cache(self) -> TeethCache:
+        return self.engine.cache
 
     def run(self, scan: Path, out_dir: Path):
         """Segment one scan, predict its landmarks and export results to out_dir."""
@@ -121,30 +125,15 @@ class InferencePipeline:
 
             proc_start = time.perf_counter()
 
-            ok = run_segmentation_with_model(
-                cfg=self.seg_cfg,
-                model=self.seg_model,
-                data_folder=work_dir,
-                visualize=self.vis_seg,
-                cache=self.cache,
-                preprocessor=self.preprocessor,
-                workers=self.workers,
-            )
+            ok, msg = self.engine.run_segmentation(work_dir)
             if not ok:
-                raise RuntimeError("segmentation failed")
+                raise RuntimeError(msg)
 
-            ok = run_bond_with_model(
-                cfg=self.bond_cfg,
-                model=self.bond_model,
-                data_folder=work_dir,
-                cache=self.cache,
-                target_landmarks=self.landmarks,
-            )
+            ok, msg = self.engine.run_bond_prediction(work_dir)
             if not ok:
-                raise RuntimeError("landmark prediction failed")
+                raise RuntimeError(msg)
 
-            postprocess_predictions(work_dir, visualize=False, cache=self.cache, preprocessor=self.preprocessor,
-                                     workers=self.workers)
+            self.engine.postprocess(work_dir, visualize=False)
 
             self.processing_time += time.perf_counter() - proc_start
 
@@ -205,30 +194,15 @@ class InferencePipeline:
 
             proc_start = time.perf_counter()
 
-            ok = run_segmentation_with_model(
-                cfg=self.seg_cfg,
-                model=self.seg_model,
-                data_folder=work_dir,
-                visualize=self.vis_seg,
-                cache=self.cache,
-                preprocessor=self.preprocessor,
-                workers=self.workers,
-            )
+            ok, msg = self.engine.run_segmentation(work_dir)
             if not ok:
-                raise RuntimeError("batch segmentation failed")
+                raise RuntimeError(f"batch segmentation failed: {msg}")
 
-            ok = run_bond_with_model(
-                cfg=self.bond_cfg,
-                model=self.bond_model,
-                data_folder=work_dir,
-                cache=self.cache,
-                target_landmarks=self.landmarks,
-            )
+            ok, msg = self.engine.run_bond_prediction(work_dir)
             if not ok:
-                raise RuntimeError("batch landmark prediction failed")
+                raise RuntimeError(f"batch landmark prediction failed: {msg}")
 
-            postprocess_predictions(work_dir, visualize=False, cache=self.cache, preprocessor=self.preprocessor,
-                                     workers=self.workers)
+            self.engine.postprocess(work_dir, visualize=False)
 
             self.processing_time += time.perf_counter() - proc_start
 
@@ -279,7 +253,7 @@ class InferencePipeline:
         """
         out_dir.mkdir(parents=True, exist_ok=True)
         internal_stem = Path(internal_name).stem
-        if self.save_ply:
+        if self.engine.save_ply:
             landmarks_json_path = work_dir / f"{internal_stem}_landmarks.json"
             landmarks_json_path.write_text(json.dumps(landmarks))
             json_to_ply(landmarks_json_path, out_dir / f"{scan.stem}_landmarks.ply")
@@ -287,7 +261,7 @@ class InferencePipeline:
             work_dir / "output_seg" / "result" / f"{internal_stem}_pred.npy",
             out_dir / f"{scan.stem}_seg.npy",
         )
-        if self.vis_seg:
+        if self.engine.visualize_segmentation:
             views = work_dir / "output_seg" / f"{internal_stem}_segmentation_views.png"
             if views.exists():
                 shutil.copy(views, out_dir / f"{scan.stem}_segmentation_views.png")

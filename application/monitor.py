@@ -1,41 +1,56 @@
 """
 Automated dental scan processing monitor.
-If it finds raw data in patient folders:
-1) Applies scanTransformMatrix (found in the Json file) to the mesh;
+
+Watches --data-root for patient folders. If it finds raw data in a patient
+folder (a raw_data/ subdirectory with STEM_*.stl scans + a config_*.json
+metadata file):
+1) Applies scanTransformMatrix (found in the metadata json) to the mesh;
 2) Rotates the scan by 180 degrees around Y axis;
 3) Rotates the scan by 90 degrees around X axis;
 4) Shifts the scan towards the center of mass and saves the offset in a file;
-Automatically runs segmentation and auto bonding.
-Tracks individual files to process new files added to existing patient folders.
+Then automatically runs segmentation and landmark prediction (bonding) via
+the shared LandmarksPredictor engine (application/pipeline.py) — the same
+engine main.py and infer.py use, so this script is only responsible for the
+folder-watching / job-tracking / API-notification loop around it, not for
+re-implementing the pipeline itself.
+
+Tracks individual files to process new files added to existing patient
+folders. Output layout, processing_status.json schema and the notify_api
+call are unchanged from the previous production version.
+
 Usage:
     python application/monitor.py \
         --data-root /workspace/application/data/ \
-        --seg-config /workspace/application/configs/Pt_semseg_app.py \
+        --seg-config /workspace/application/app_configs/Pt_semseg_teeth3ds_app.py \
         --seg-weight /workspace/application/weights/segmentator_best.pth \
-        --bond-config /workspace/application/configs/Pt_regressor_app.py \
-        --bond-weight /workspace/application/weights/regressor_best.pth \
+        --bond-config /workspace/application/app_configs/Pt_landmarks_app.py \
+        --bond-weight /workspace/application/weights/heatmap_landmarks.pth \
         --check-interval 10
+
+Every flag exposed by main.py's LandmarksPredictor (--remesh, --cache,
+--landmarks, --workers, --save-ply, --vis-seg, --preprocessing) is also
+available here; see --help.
 """
 # CRITICAL: Set rendering environment variables BEFORE any imports that use VTK/graphics
 import os
+import sys
+sys.path.append(os.path.abspath("application"))
 os.environ["VTK_OPENGL_HAS_EGL"] = "0"
 
-import json
 import time
 import argparse
-import traceback
 from pathlib import Path
 from datetime import datetime
 
 import debugpy
 import requests
-import torch
 
-from preprocessor import Preprocessor
-from segment_scan import run_segmentation_with_model
-from bond import postprocess_predictions, run_bond_with_model
-from visualizers import plot_jaw
-from utils import *
+from application.preprocessor import Preprocessor
+from application.pipeline import LandmarksPredictor
+from application.bond import ALL_LANDMARKS
+from application.cache import TeethCache
+from application.visualizers import plot_jaw
+from application.utils import load_json, save_json
 
 # Job status codes — kept in sync with the remote API
 PENDING    = 0
@@ -53,6 +68,13 @@ class ScanMonitor:
         bond_weight: Path,
         check_interval: int = 10,
         status_file: str = "processing_status.json",
+        remesh: bool = False,
+        cache: bool = False,
+        landmarks: list[str] | None = None,
+        workers: int = 1,
+        save_ply: bool = False,
+        vis_seg: bool = False,
+        preprocessing: str | None = None,
     ):
         self.data_root      = Path(data_root)
         self.check_interval = check_interval
@@ -70,26 +92,33 @@ class ScanMonitor:
             if not p.exists():
                 raise ValueError(f"{label} does not exist: {p}")
 
-        # Load both models once at startup
-        print("\n🔄 Loading models onto GPU …")
-        self.seg_cfg,  self.seg_model  = self.load_model(seg_config,  seg_weight)
-        self.bond_cfg, self.bond_model = self.load_model(bond_config, bond_weight)
-        print("✅ Both models ready.\n")
+        # Engine: loads both models once at startup, shared with main.py/infer.py
+        self.engine = LandmarksPredictor(
+            seg_config, seg_weight, bond_config, bond_weight,
+            remesh=remesh,
+            visualize_segmentation=vis_seg,
+            save_ply=save_ply,
+            cache=TeethCache() if cache else None,
+            preprocessing=preprocessing,
+            landmarks=landmarks,
+            workers=workers,
+        )
 
         print(f"✅ Monitor initialised")
         print(f"   Data root     : {self.data_root}")
         print(f"   Check interval: {self.check_interval}s")
         print(f"   Status file   : {self.status_file}")
+        print(f"   Remesh        : {remesh}")
+        print(f"   Cache         : {cache}")
+        print(f"   Workers       : {workers}")
+        print(f"   Save PLY      : {save_ply}")
+        print(f"   Vis. seg.     : {vis_seg}")
+        print(f"   Landmarks     : {landmarks or 'all'}")
+        print(f"   Preprocessing : {preprocessing or 'none (identity)'}")
 
     # ------------------------------------------------------------------
-    # Model loading
+    # Status / API helpers
     # ------------------------------------------------------------------
-    def __del__(self):
-        try:
-            del self.seg_model, self.bond_model
-            torch.cuda.empty_cache()
-        except Exception:
-            pass
 
     def load_status(self) -> dict:
         return load_json(self.status_file)
@@ -112,6 +141,10 @@ class ScanMonitor:
         except requests.exceptions.RequestException as e:
             print(f"   ⚠️  API notification failed: {e}")
             return False
+
+    # ------------------------------------------------------------------
+    # Discovery
+    # ------------------------------------------------------------------
 
     def find_pending_patients(self) -> list[Path]:
         """Return patient dirs that have work to do."""
@@ -159,39 +192,14 @@ class ScanMonitor:
         return len(self.unprocessed_stls(patient_dir, patient_status)) > 0
 
     # ------------------------------------------------------------------
-    # Pipeline stages
+    # Post-run visualisation
     # ------------------------------------------------------------------
 
-    @timed
-    def run_segmentation(self, patient_dir: Path) -> tuple[bool, str]:
-        print(f"\n{'='*70}\n🦷 SEGMENTATION — {patient_dir.name}\n{'='*70}")
-        try:
-            ok = run_segmentation_with_model(
-                cfg=self.seg_cfg, model=self.seg_model, data_folder=patient_dir
-            )
-            msg = f"Segmentation {'completed' if ok else 'failed'} for {patient_dir.name}"
-            return ok, msg
-        except Exception as e:
-            traceback.print_exc()
-            return False, str(e)
-
-    @timed
-    def run_bond_prediction(self, patient_dir: Path) -> tuple[bool, str]:
-        print(f"\n{'='*70}\n📍 BOND PREDICTION — {patient_dir.name}\n{'='*70}")
-        try:
-            ok = run_bond_with_model(
-                cfg=self.bond_cfg, model=self.bond_model, data_folder=patient_dir
-            )
-            msg = f"Bond prediction {'completed' if ok else 'failed'} for {patient_dir.name}"
-            return ok, msg
-        except Exception as e:
-            traceback.print_exc()
-            return False, str(e)
-
     def make_plots(self, patient_dir: Path):
-        """Generate all visualisations. Runs after the API has been notified."""
+        """Generate all visualisations. Runs after the API has been notified,
+        so a slow render never delays the "done" notification."""
         try:
-            postprocess_predictions(patient_dir, visualize=True)
+            self.engine.postprocess(patient_dir, visualize=True)
             print("✅ Per-tooth visualisations done")
         except Exception as e:
             print(f"⚠️  Per-tooth visualisation failed: {e}")
@@ -260,20 +268,23 @@ class ScanMonitor:
             patient_status["failed_files"] = list(set(patient_status["failed_files"]) | set(todo))
             self.save_status(status)
 
+        self.engine.clear_cache()
+
         # ── Segmentation ──────────────────────────────────────────────
-        ok, msg = self.run_segmentation(patient_dir)
+        ok, msg = self.engine.run_segmentation(patient_dir)
         if not ok:
             fail("Segmentation failed", msg)
             return
 
         # ── Bond prediction ───────────────────────────────────────────
-        ok, msg = self.run_bond_prediction(patient_dir)
+        ok, msg = self.engine.run_bond_prediction(patient_dir)
         if not ok:
             fail("Bond prediction failed", msg)
             return
 
         try:
-            postprocess_predictions(patient_dir, visualize=False)
+            self.engine.postprocess(patient_dir, visualize=False)
+            self.engine.export_ply(patient_dir)
             print("✅ Results saved")
         except Exception as e:
             fail("Post-processing failed", str(e))
@@ -298,6 +309,7 @@ class ScanMonitor:
         print("🔍 Dental Scan Monitor — running")
         print(f"{'='*70}\n")
 
+        status = {}
         try:
             while True:
                 # Re-read status each iteration (picks up manual edits)
@@ -334,6 +346,24 @@ def main():
     parser.add_argument("--check-interval", type=int, default=10, help="Seconds between scans (default: 10)")
     parser.add_argument("--status-file",    default="processing_status.json", help="Status filename")
     parser.add_argument("--debug",          action="store_true", help="Wait for debugger on port 5681")
+    # ================== Same optionals as main.py / infer.py ==========
+    parser.add_argument("--remesh",         action="store_true", help="Enables remeshing of scans")
+    parser.add_argument("--preprocessing",  required=False, default=None,
+                         help="YAML with per-arch scan normalization transforms, applied on top of "
+                              "the raw-scan ingestion step. Omit for identity (matches old production).")
+    parser.add_argument("--vis-seg",        action="store_true", help="Renders the 3D segmentation")
+    parser.add_argument("--save-ply",       action="store_true", help="Saves landmarks as point cloud")
+    parser.add_argument("--cache",          action="store_true",
+                         help="Cache teeth meshes in memory instead of writing them to disk under "
+                              "output_seg/teeth/. Faster, but skips writing those per-tooth files — "
+                              "leave disabled to keep the old production on-disk layout.")
+    parser.add_argument("--landmarks",      nargs="+", choices=ALL_LANDMARKS, default=None,
+                         help="Restrict landmark prediction/post-processing to these classes "
+                              "(default: all). 'Bracket', 'Incisal' and 'OuterPoint' are always "
+                              "computed since every landmark's basePlane is defined relative to them.")
+    parser.add_argument("--workers",        type=int, default=1,
+                         help="Number of worker threads for the CPU/IO-bound pipeline steps. "
+                              "Does not affect model inference itself. Default: 1 (sequential).")
     args = parser.parse_args()
 
     if args.debug:
@@ -350,6 +380,13 @@ def main():
         bond_weight=args.bond_weight,
         check_interval=args.check_interval,
         status_file=args.status_file,
+        remesh=args.remesh,
+        cache=args.cache,
+        landmarks=args.landmarks,
+        workers=args.workers,
+        save_ply=args.save_ply,
+        vis_seg=args.vis_seg,
+        preprocessing=args.preprocessing,
     )
     monitor.run()
 

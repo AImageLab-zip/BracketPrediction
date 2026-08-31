@@ -1,18 +1,124 @@
-# Warning (WIP)
-Main developement branch. For inference, use the `main.py` or `infer.py` scripts as your entrypoint.
+# BracketPrediction
+
+Tooth segmentation + landmark (bracket/bonding point) prediction on intra-oral
+scans. One shared pipeline engine, several entry points:
+
+| Script                     | Use case                                                                                     |
+|-----------------------------|-----------------------------------------------------------------------------------------------|
+| `application/monitor.py`   | **Production (automated).** Watches a folder for new patient scans and processes them automatically. This is what the Docker image runs. |
+| `infer.py`                 | **Production (on-the-fly).** Manual, ad-hoc segmentation + landmark prediction on a single scan or a folder of scans — the tool to reach for outside the Docker monitor. |
+| `main.py`                  | **Development only.** Benchmark harness for the 3DTeethLand dataset layout (sample lists, optional GT collection). Not part of the production path. |
+| `segment.py`                | Segmentation only (no landmarks), for debugging/inspecting masks.                             |
+
+All of them are thin wrappers around `application/pipeline.py`'s `LandmarksPredictor`,
+which loads both models once and exposes `run_segmentation`, `run_bond_prediction`
+and `postprocess`. If you need to change how segmentation + landmark prediction
+actually works, that's the one file to edit — everything else (folder-watching in
+`monitor.py`, symlink/temp-dir staging in `infer.py`, dataset iteration in `main.py`)
+is just orchestration around it.
 
 # Input format
+
 The model expects scans (`.stl`/`.obj`) oriented in the reference frame shown below: the occlusal plane normal aligned with `Z`, the mesio-distal axis aligned with `X`, and the arch rotated so the crowns point along `-Z` (i.e. the raw scan, typically captured with the crowns pointing up, must be rotated 180° around `Y`).
 
 ![Reference frame](assets/standard_frame.png)
 
+`infer.py` and `main.py` expect scans already in this frame. `application/monitor.py`
+additionally accepts **raw**, arbitrarily-oriented scans (see below) and reorients
+them itself before running the pipeline.
+
 # Model weights
+
 Pretrained `--seg-weight` and `--bond-weight` checkpoints are available [here](https://drive.google.com/drive/folders/1dQYWACZfZUrg0hWHfTeNg7L60KiqFGL-?usp=sharing).
 
-# Inference
+# Production: the Docker monitor
+
+```bash
+docker compose up -d --build
+```
+
+`application/monitor.py` polls `--data-root` (mounted at `application/data/` —
+see `docker-compose.yml`) for patient folders and processes any new one it finds,
+tracking progress in `<data-root>/processing_status.json` and notifying the
+[autobonding](https://github.com/AImageLab-zip/AutoBonding) API as each job starts/completes/fails.
+
+### Expected input layout
+
+A patient folder is picked up once it contains either:
+
+- **Raw scans**, under `<patient_id>/raw_data/`:
+  - `STEM_lower_<id>.stl`, `STEM_upper_<id>.stl` (case-insensitive `STEM_` prefix)
+  - `config_<id>.json` (case-insensitive `config_` prefix), containing a
+    `scanTransformMatrix` (16 floats, row-major 4×4).
+
+  The monitor applies `scanTransformMatrix`, then a fixed 180°(Y) + 90°(X)
+  rotation (plus an extra 180°(Y) for the upper arch), centers the scan on its
+  centroid, and writes the result as `<patient_id>/STEM_<arch>_<id>.stl` plus
+  a `STEM_<arch>_<id>_shift.json` recording the centroid offset (needed to map
+  predictions back to the original scan later).
+
+- **Already-oriented scans** dropped directly as `<patient_id>/*.stl` — the
+  raw-ingestion step above is skipped for these.
+
+Only new/unprocessed `.stl` files trigger work; files already recorded in
+`processing_status.json` (processed or failed) are skipped on later polls.
+
+### Output layout (per patient, unchanged from before)
+
+```
+<patient_id>/
+  output_seg/
+    result/<scan>_pred.npy          per-vertex segmentation mask
+    teeth/<tooth_key>.stl, .json    per-tooth mesh + normalization params (skipped if --cache)
+    <scan>_segmentation_views.png   only with --vis-seg
+    remeshed/, remeshed_teeth/      only with --remesh
+  output_reg/
+    results/
+      predictions.json              raw per-tooth heatmap decode
+      projected_points.json         predictions projected onto the mesh, pre-rotation
+      landmarks.json                final result: predictions rotated back into the
+                                     original scan frame, keyed by tooth (e.g. "118_lower_FDI_47")
+      projected_points_rotated.json byte-for-byte identical to landmarks.json — kept
+                                     as an alias for anything still reading the old name
+      landmarks.ply                 only with --save-ply
+    plots/patient_<id>_FDI_<fdi>.png   per-tooth prediction plot (generated after completion)
+    jaw_plots/<jaw>_rotated_predictions.png   whole-jaw preview (generated after completion)
+```
+
+Visualisation (`output_reg/plots/`, `output_reg/jaw_plots/`) is generated
+*after* the API is notified, so a slow render never delays the "done" signal.
+
+### Configuring the container
+
+Every optional flag the shared `LandmarksPredictor` engine exposes is available
+on the monitor — the same ones `infer.py` takes on the command line
+(`--preprocessing`, `--vis-seg`, `--save-ply`, `--landmarks`, `--workers`),
+plus `--remesh`/`--cache` which `infer.py` doesn't surface (it always caches,
+never remeshes). All of them are settable via environment variables
+(`docker-compose.yml` / a `.env` file next to it) so the deployment can be
+tuned without rebuilding:
+
+| Env var           | Monitor flag       | Default | Notes |
+|--------------------|--------------------|---------|-------|
+| `API_TOKEN`        | —                   | —       | Bearer token for the status-notification API. |
+| `CHECK_INTERVAL`    | `--check-interval`  | `5`     | Seconds between folder polls. |
+| `REMESH`            | `--remesh`          | `false` | Also save a remeshed version of each scan + its per-tooth split. |
+| `CACHE`             | `--cache`           | `false` | Keep tooth meshes in memory instead of writing `output_seg/teeth/*`. Faster, but skips those on-disk files — leave `false` to keep the full old on-disk layout. |
+| `SAVE_PLY`          | `--save-ply`        | `false` | Also write `landmarks.ply`. |
+| `VIS_SEG`           | `--vis-seg`         | `false` | Also render `<scan>_segmentation_views.png`. |
+| `WORKERS`           | `--workers`         | `1`     | Thread pool size for CPU/IO-bound steps (disk I/O, per-tooth splitting, heatmap decoding). Does not affect GPU inference. |
+| `LANDMARKS`         | `--landmarks`       | (all)   | Space-separated subset, e.g. `LANDMARKS="Bracket Incisal Cusp"`. `Bracket`/`Incisal`/`OuterPoint` are always computed regardless. |
+| `PREPROCESSING`     | `--preprocessing`   | (unset) | Path to a YAML calibration file for a second, uniform per-arch transform applied on top of raw-scan ingestion (see `pointcept/datasets/preprocessing/autobonding/scan_normalizer.py`). Left unset in production — identity, i.e. the exact old-production math — unless a specific calibration is needed. |
+
+# On-the-fly / manual inference
 
 ## infer.py
-Simple entrypoint for a single scan or a folder of scans (scanned recursively). Each scan's filename must contain `lower` or `upper`. Writes a per-scan segmentation mask (and, optionally, a landmarks point cloud / segmentation rendering) plus a combined `landmarks.json` aggregating every scan's predictions.
+The on-the-fly production entry point: run this for a one-off scan or a folder
+of scans outside the Docker monitor (reprocessing, spot-checks, scans that
+don't go through the watched folder). Each scan's filename must contain
+`lower` or `upper`. Writes a per-scan segmentation mask (and, optionally, a
+landmarks point cloud / segmentation rendering) plus a combined
+`landmarks.json` aggregating every scan's predictions.
 
 ```bash
 python infer.py \
@@ -27,8 +133,11 @@ python infer.py \
 
 Add `--batch` to segment and bond every scan in one pass instead of one scan at a time (faster on large sets), `--vis-seg` to also save a rendering of the segmentation, `--workers N` to parallelize the CPU/IO-bound steps, and `--landmarks ...` to restrict prediction to specific landmark classes. Run `python infer.py --help` for the full list of options.
 
-## main.py
-Entrypoint used to run the model on the 3DTeethLand dataset layout (`lower`/`upper` subfolders keyed by patient id), matching predictions against `.txt` sample lists and optionally collecting ground-truth keypoints.
+## main.py (development only)
+Not part of the production path — a benchmark harness used to run the model on
+the 3DTeethLand dataset layout (`lower`/`upper` subfolders keyed by patient
+id), matching predictions against `.txt` sample lists and optionally
+collecting ground-truth keypoints.
 
 ```bash
 python main.py \
@@ -46,3 +155,16 @@ python main.py \
 ```
 
 A ready-to-use version of this command is available in `run_main_3dteethland.sh`. Run `python main.py --help` for the full list of options.
+
+## segment.py
+Segmentation only (no landmark/bond model) — useful for inspecting masks or
+debugging the base-plate removal (`--debase`) without paying for the full
+pipeline. Run `python segment.py --help` for the full list of options.
+
+# Branches
+
+`prod` is the production branch — everything the Docker image on the server
+builds from. `new_landmarks_sts` is the development branch new features land
+on first; `prod` is periodically brought up to date from it once a change is
+ready to ship. `main`, `commit_miccai`, `new_landmarks` and `new_landmarks_prod`
+are deprecated/superseded and slated for removal.

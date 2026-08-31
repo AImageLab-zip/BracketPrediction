@@ -8,19 +8,16 @@ os.environ["VTK_OPENGL_HAS_EGL"] = "0"
 import argparse
 import debugpy
 from pathlib import Path
-import traceback
 import json
 import pickle
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from application.segment_scan import run_segmentation_with_model
-from application.bond import run_bond_with_model, postprocess_predictions, ALL_LANDMARKS
-from application.utils import load_model, teethland_output, write_rows
+from application.bond import ALL_LANDMARKS
+from application.utils import teethland_output, write_rows
 from application.timing import *
 from application.cache import TeethCache
+from application.pipeline import LandmarksPredictor
 import shutil
-from application.visualizers import json_to_ply
-from pointcept.datasets.preprocessing.autobonding.scan_normalizer import ScanNormalizer
 import tempfile
 
 def remove_temp_folder(temp_dir:Path):
@@ -37,105 +34,6 @@ def get_samples(L:list[Path]) -> list[str]:
             samples = f.read().splitlines()
             all_samples += samples
     return all_samples
-
-class LandmarksPredictor:
-    def __init__(
-        self,
-        seg_config: str,
-        seg_weight: str,
-        bond_config: str,
-        bond_weight: str,
-        remesh: bool,
-        visualize_segmentation: bool,
-        save_ply: bool,
-        cache: TeethCache | None = None,
-        preprocessing = None,
-        landmarks: list[str] | None = None,
-        workers: int = 1,
-    ):
-        self.seg_config = Path(seg_config)
-        self.seg_weight= Path(seg_weight)
-        self.bond_config = Path(bond_config)
-        self.bond_weight = Path(bond_weight)
-        self.remesh = remesh
-        self.visualize_segmentation = visualize_segmentation
-        self.save_ply = save_ply
-        self.cache = cache
-        self.preprocessing = preprocessing
-        self.landmarks = landmarks
-        self.workers = workers
-        self.preprocessor = ScanNormalizer(self.preprocessing)
-        print("\n🔄 Loading models on GPU …")
-        self.seg_cfg,  self.seg_model  = load_model(self.seg_config,  self.seg_weight)
-        self.bond_cfg, self.bond_model = load_model(self.bond_config, self.bond_weight)
-        print("✅ Both models ready.\n")
-
-    def _clean_outputs(self, directory:Path):
-        for name in ("output_reg", "output_seg"):
-            target = directory / name
-            if target.exists() and target.is_dir():
-                shutil.rmtree(target)
-
-    def run_segmentation(self, patient_dir: Path) -> tuple[bool, str]:
-        print(f"\n{'='*70}\n🦷 SEGMENTATION — {patient_dir.name}\n{'='*70}")
-        try:
-            ok = run_segmentation_with_model(
-                cfg=self.seg_cfg,
-                model=self.seg_model,
-                data_folder=patient_dir,
-                remesh = self.remesh,
-                visualize=self.visualize_segmentation,
-                cache=self.cache,
-                preprocessor=self.preprocessor,
-                workers=self.workers,
-            )
-            msg = f"Segmentation {'completed' if ok else 'failed'} for {patient_dir.name}"
-            return ok, msg
-        except Exception as e:
-            traceback.print_exc()
-            return False, str(e)
-
-    def run_bond_prediction(self, patient_dir: Path) -> tuple[bool, str]:
-        print(f"\n{'='*70}\n📍 BOND PREDICTION — {patient_dir.name}\n{'='*70}")
-        try:
-            ok = run_bond_with_model(
-                cfg=self.bond_cfg,
-                model=self.bond_model,
-                data_folder=patient_dir,
-                cache=self.cache,
-                target_landmarks=self.landmarks,
-            )
-            msg = f"Bond prediction {'completed' if ok else 'failed'} for {patient_dir.name}"
-            return ok, msg
-        except Exception as e:
-            traceback.print_exc()
-            return False, str(e)
-
-    def _clear_cache(self):
-        if self.cache:
-            self.cache.clear_teeth_data()
-    
-    def predict(self, directory:Path, clean_previous=True, postprocess=False):
-        if clean_previous: self._clean_outputs(directory)
-        self._clear_cache()
-        ok, msg = self.run_segmentation(directory)
-        if not ok:
-            print("Segmentation failed {}".format(msg))
-            return
-        ok, msg = self.run_bond_prediction(directory)
-        if not ok:
-            print("Bond prediction failed {}".format(msg))
-            return
-        if not postprocess: return
-        postprocess_predictions(directory,
-            visualize=False,
-            cache=self.cache,
-            preprocessor=self.preprocessor,
-            workers=self.workers)
-        print("✅ Results saved")
-        if self.save_ply:
-            json_to_ply(directory / "output_reg" / "results" / "landmarks.json",
-                        directory / "output_reg" / "results" / "landmarks.ply")
 
 def _merge_gold(kpt_path: Path, merged_gold: dict):
     patient_id = kpt_path.stem.replace("__kpt", "")
