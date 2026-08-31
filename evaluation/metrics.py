@@ -162,6 +162,76 @@ def eval_map(pred_all, gt_all, dist_thresh=0.1):
     return rec, prec, ap
 
 
+def eval_det_cls_error(pred, gt, dist_thresh):
+    """ Same greedy, confidence-sorted matching as eval_det_cls_map, but
+        returns the Euclidean distance of each matched (true-positive) pair
+        instead of a precision/recall curve.
+
+        Unmatched predictions (false positives) and unmatched GT (misses)
+        are excluded -- this is a pure localization-quality metric, kept
+        separate from the precision/recall that AP/AR already measure.
+    """
+    class_recs = {}
+    for mesh_name in gt.keys():
+        keypoints = np.array(gt[mesh_name])
+        class_recs[mesh_name] = {'kp': keypoints, 'det': [False] * len(keypoints)}
+    for mesh_name in pred.keys():
+        if mesh_name not in gt:
+            class_recs[mesh_name] = {'kp': np.array([]), 'det': []}
+
+    mesh_names = []
+    confidence = []
+    KP = []
+    for mesh_name in pred.keys():
+        for kp, conf in pred[mesh_name]:
+            mesh_names.append(mesh_name)
+            confidence.append(conf)
+            KP.append(kp)
+    confidence = np.array(confidence)
+    KP = np.array(KP)
+    sorted_ind = np.argsort(-confidence)
+    KP = KP[sorted_ind, ...]
+    mesh_names = [mesh_names[x] for x in sorted_ind]
+
+    distances = []
+    for d in range(len(mesh_names)):
+        R = class_recs[mesh_names[d]]
+        kp = KP[d]
+        KPGT = R['kp']
+        if KPGT.size == 0:
+            continue
+        distance = np.linalg.norm(np.array(kp).reshape(-1, 3) - KPGT, axis=1)
+        dmin, jmin = distance.min(), distance.argmin()
+        if dmin < dist_thresh and not R['det'][jmin]:
+            R['det'][jmin] = True
+            distances.append(float(dmin))
+    return distances
+
+
+def landmark_error_stats(pred_all_map, gt_all, dist_thresh=3.0):
+    """ Mean/std Euclidean error (mm) over matched (TP) pairs, pooled and
+        per class. Matching mirrors eval_det_cls_map's greedy assignment at
+        a single fixed distance threshold (default 3mm). No penalty for
+        unmatched predictions/GT -- AP/AR already measure precision/recall.
+    """
+    per_class = {}
+    pooled = []
+    for classname in gt_all.keys():
+        distances = eval_det_cls_error(pred_all_map.get(classname, {}), gt_all[classname], dist_thresh)
+        pooled.extend(distances)
+        per_class[classname] = {
+            'error_mean_mm': float(np.mean(distances)) if distances else None,
+            'error_std_mm': float(np.std(distances)) if distances else None,
+            'n': len(distances),
+        }
+    return {
+        'error_mean_mm': float(np.mean(pooled)) if pooled else None,
+        'error_std_mm': float(np.std(pooled)) if pooled else None,
+        'error_n': len(pooled),
+        'per_class': per_class,
+    }
+
+
 def filter_scan(all_scans, scan_name):
     all_filtered = {}
     for category, data_dict in all_scans.items():

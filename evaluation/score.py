@@ -8,7 +8,7 @@ import argparse
 import json
 import pandas as pd
 import pickle
-from metrics import eval_map, voc_ar, calculate_metrics_per_scan
+from metrics import eval_map, voc_ar, calculate_metrics_per_scan, landmark_error_stats
 import numpy as np
 import debugpy
 
@@ -123,6 +123,19 @@ def main():
         gold = pickle.load(fp)
     scores = score(gold, pred_all_map)
     scores = reformat_scores(scores)
+
+    # mean/std Euclidean error (mm) over matched (TP) pairs, pooled and per
+    # class -- a pure localization-quality number, decoupled from the
+    # precision/recall that mAP/mAR already measure (no penalty here for
+    # extra/missing predictions).
+    error_stats = landmark_error_stats(pred_all_map, gold)
+    scores["error_mean_mm"] = error_stats["error_mean_mm"]
+    scores["error_std_mm"] = error_stats["error_std_mm"]
+    scores["error_n"] = error_stats["error_n"]
+    for class_name, class_stats in error_stats["per_class"].items():
+        scores[f"error_mean_mm_{class_name}"] = class_stats["error_mean_mm"]
+        scores[f"error_std_mm_{class_name}"] = class_stats["error_std_mm"]
+        scores[f"error_n_{class_name}"] = class_stats["n"]
 
     # Compute per-scan metrics to list worst-performing samples
     # filter out NEW_LANDMARKS so per-scan calc doesn't KeyError
