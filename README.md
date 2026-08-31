@@ -165,11 +165,3 @@ A ready-to-use version of this command is available in `run_main_3dteethland.sh`
 Segmentation only (no landmark/bond model) — useful for inspecting masks or
 debugging the base-plate removal (`--debase`) without paying for the full
 pipeline. Run `python segment.py --help` for the full list of options.
-
-# Branches
-
-`prod` is the production branch — everything the Docker image on the server
-builds from. `new_landmarks_sts` is the development branch new features land
-on first; `prod` is periodically brought up to date from it once a change is
-ready to ship. `main`, `commit_miccai`, `new_landmarks` and `new_landmarks_prod`
-are deprecated/superseded and slated for removal.
