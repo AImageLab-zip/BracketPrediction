@@ -23,5 +23,5 @@ services:
       - VIS_SEG=${VIS_SEG:-false}
       - WORKERS=${WORKERS:-1}
       - LANDMARKS=${LANDMARKS:-}
-      - PREPROCESSING=${PREPROCESSING:-/workspace/production_preprocessing.yaml}
+      - PREPROCESSING=${PREPROCESSING:-/workspace/preprocessing/production_preprocessing.yaml}
     command: bash /workspace/run_monitor.sh

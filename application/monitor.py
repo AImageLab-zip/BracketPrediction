@@ -249,7 +249,7 @@ class ScanMonitor:
             return
 
         # All input must arrive via raw_data/ + config_<id>.json: the standard
-        # orientation is now applied through production_preprocessing.yaml, which
+        # orientation is now applied through preprocessing/production_preprocessing.yaml, which
         # would mis-rotate a scan dropped straight in already oriented. Fail such
         # patients explicitly rather than segmenting a mis-oriented scan.
         if not (patient_dir / "raw_data").is_dir():

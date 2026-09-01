@@ -10,14 +10,14 @@ python main.py \
     --seg-weight  application/app_weights/segmentator_best.pth \
     --bond-config application/app_configs/Pt_landmarks_app.py \
     --bond-weight /homes/mlugli/BracketPrediction/Mlugli/models/AutoBonding/heatmap_landmarks.pth \
-    --preprocessing /homes/mlugli/BracketPrediction/3dteethland_preprocessing.yaml \
+    --preprocessing /homes/mlugli/BracketPrediction/preprocessing/3dteethland_preprocessing.yaml \
     --cache \
     --vis-seg \
     --save-ply
 
 # /homes/mlugli/BracketPrediction/Teeth3DS/splits/3DTeethland_debug/testing_lower.txt
 # /homes/mlugli/BracketPrediction/Mlugli/temp
-#--preprocessing /homes/mlugli/BracketPrediction/3dteethland_preprocessing.yaml \
+#--preprocessing /homes/mlugli/BracketPrediction/preprocessing/3dteethland_preprocessing.yaml \
 #/homes/mlugli/BracketPrediction/Teeth3DS/splits/3DTeethland_debug/testing_lower.txt
 # /homes/mlugli/BracketPrediction/exp_brackets/3dteethland_0/model/model_best.pth
 # /homes/mlugli/BracketPrediction/exp_brackets/3dteethland_1_softdice/model/model_best.pth 

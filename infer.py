@@ -21,7 +21,7 @@ python infer.py \
     --seg-weight  application/app_weights/segmentator_best.pth \
     --bond-config application/app_configs/Pt_landmarks_app.py \
     --bond-weight application/app_weights/heatmap_landmarks.pth \
-    --preprocessing 3dteethland_preprocessing.yaml
+    --preprocessing preprocessing/3dteethland_preprocessing.yaml
 """
 import os
 import sys

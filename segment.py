@@ -15,7 +15,7 @@ python segment.py \
     --input /path/to/scans --output /path/to/masks \
     --seg-config application/app_configs/Pt_semseg_teeth3ds_app.py \
     --seg-weight application/app_weights/segmentator_best.pth \
-    --preprocessing 3dteethland_preprocessing.yaml \
+    --preprocessing preprocessing/3dteethland_preprocessing.yaml \
     --render-segmentation --debase
 """
 import os

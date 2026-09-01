@@ -52,7 +52,7 @@ class Preprocessor:
 
             # Apply only the per-patient scanTransformMatrix here. The fixed
             # standard-orientation rotations (180 Y / 90 X / upper extra 180 Y)
-            # now live in production_preprocessing.yaml, applied by the
+            # now live in preprocessing/production_preprocessing.yaml, applied by the
             # segmentation dataset loader and inverted by
             # bond.postprocess_predictions. No centre-of-mass shift: the
             # segmentator re-centres online (NormalizeCoord) and the landmark

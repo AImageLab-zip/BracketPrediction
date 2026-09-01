@@ -1,4 +1,4 @@
-# BracketPrediction
+# IOS-Landmarks
 
 Tooth segmentation + landmark (bracket/bonding point) prediction on intra-oral
 scans. One shared pipeline engine, several entry points:
@@ -16,6 +16,65 @@ and `postprocess`. If you need to change how segmentation + landmark prediction
 actually works, that's the one file to edit — everything else (folder-watching in
 `monitor.py`, symlink/temp-dir staging in `infer.py`, dataset iteration in `main.py`)
 is just orchestration around it.
+
+# Results
+
+## Predicted landmarks
+
+Final per-tooth landmarks (`output_reg/results/landmarks.json`) projected back
+onto the input scans. Point colours follow this legend:
+
+<p align="center">
+  <img src="assets/legend.png" alt="Landmark colour legend" width="200">
+</p>
+
+<table>
+  <tr><th></th><th>Lower arch</th><th>Upper arch</th></tr>
+  <tr>
+    <td align="center"><b>Case&nbsp;1</b></td>
+    <td><img src="assets/1_lower.png" alt="Case 1 lower arch landmarks" width="320"></td>
+    <td><img src="assets/1_upper.png" alt="Case 1 upper arch landmarks" width="320"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Case&nbsp;2</b></td>
+    <td><img src="assets/2_lower.png" alt="Case 2 lower arch landmarks" width="320"></td>
+    <td><img src="assets/2_upper.png" alt="Case 2 upper arch landmarks" width="320"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Case&nbsp;3</b></td>
+    <td><img src="assets/3_lower.png" alt="Case 3 lower arch landmarks" width="320"></td>
+    <td><img src="assets/3_upper.png" alt="Case 3 upper arch landmarks" width="320"></td>
+  </tr>
+</table>
+
+## Bracket placement in clinical software
+
+These predictions drive a proprietary 3D orthodontic-modelling application
+(not part of this repository and not publicly released) that converts each
+predicted bonding point + base plane into a positioned bracket. Final bracket
+setups for three cases:
+
+<table>
+  <tr><th></th><th>Front</th><th>Left</th><th>Right</th></tr>
+  <tr>
+    <td align="center"><b>Mild&nbsp;1</b></td>
+    <td><img src="assets/mild_1_front.png" alt="Mild case 1, front view" width="240"></td>
+    <td><img src="assets/mild_1_left.png" alt="Mild case 1, left view" width="240"></td>
+    <td><img src="assets/mild_1_right.png" alt="Mild case 1, right view" width="240"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Mild&nbsp;2</b></td>
+    <td><img src="assets/mild_2_front.png" alt="Mild case 2, front view" width="240"></td>
+    <td><img src="assets/mild_2_left.png" alt="Mild case 2, left view" width="240"></td>
+    <td><img src="assets/mild_2_right.png" alt="Mild case 2, right view" width="240"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Moderate&nbsp;1</b></td>
+    <td><img src="assets/moderate_1_front.png" alt="Moderate case 1, front view" width="240"></td>
+    <td><img src="assets/moderate_1_left.png" alt="Moderate case 1, left view" width="240"></td>
+    <td><img src="assets/moderate_1_right.png" alt="Moderate case 1, right view" width="240"></td>
+  </tr>
+</table>
 
 # Input format
 
@@ -54,7 +113,7 @@ A patient folder is picked up once it contains **raw scans** under
 `application/preprocessor.Preprocessor` applies **only** the per-patient
 `scanTransformMatrix` and writes `<patient_id>/STEM_<arch>_<id>.stl`. The fixed
 standard-orientation rotation — 180°(Y) + 90°(X), plus an extra 180°(Y) for the
-upper arch — lives in `production_preprocessing.yaml` (`PREPROCESSING` env var);
+upper arch — lives in `preprocessing/production_preprocessing.yaml` (`PREPROCESSING` env var);
 it is applied by the segmentation dataset loader before inference and inverted by
 `postprocess_predictions` to map predictions back to the `scanTransformMatrix`
 frame. The scan is not re-centred — the segmentator normalises coordinates online
@@ -113,7 +172,7 @@ tuned without rebuilding:
 | `VIS_SEG`           | `--vis-seg`         | `false` | Also render `<scan>_segmentation_views.png`. |
 | `WORKERS`           | `--workers`         | `1`     | Thread pool size for CPU/IO-bound steps (disk I/O, per-tooth splitting, heatmap decoding). Does not affect GPU inference. |
 | `LANDMARKS`         | `--landmarks`       | (all)   | Space-separated subset, e.g. `LANDMARKS="Bracket Incisal Cusp"`. `Bracket`/`Incisal`/`OuterPoint` are always computed regardless. |
-| `PREPROCESSING`     | `--preprocessing`   | `/workspace/production_preprocessing.yaml` | Per-arch scan-orientation transform, applied by the segmentation dataset loader and inverted by `postprocess_predictions` (format: `pointcept/datasets/preprocessing/autobonding/scan_normalizer.py`). The default carries the standard-orientation rotation the segmentator requires — override only with a YAML that still produces that orientation. |
+| `PREPROCESSING`     | `--preprocessing`   | `/workspace/preprocessing/production_preprocessing.yaml` | Per-arch scan-orientation transform, applied by the segmentation dataset loader and inverted by `postprocess_predictions` (format: `pointcept/datasets/preprocessing/autobonding/scan_normalizer.py`). The default carries the standard-orientation rotation the segmentator requires — override only with a YAML that still produces that orientation. |
 
 # On-the-fly / manual inference
 
@@ -132,7 +191,7 @@ python infer.py \
     --seg-weight  /path/to/seg_weight.pth \
     --bond-config application/app_configs/Pt_landmarks_app.py \
     --bond-weight /path/to/bond_weight.pth \
-    --preprocessing 3dteethland_preprocessing.yaml \
+    --preprocessing preprocessing/3dteethland_preprocessing.yaml \
     --save-ply
 ```
 
@@ -153,7 +212,7 @@ python main.py \
     --seg-weight  /path/to/seg_weight.pth \
     --bond-config application/app_configs/Pt_landmarks_app.py \
     --bond-weight /path/to/bond_weight.pth \
-    --preprocessing 3dteethland_preprocessing.yaml \
+    --preprocessing preprocessing/3dteethland_preprocessing.yaml \
     --cache \
     --vis-seg \
     --save-ply
