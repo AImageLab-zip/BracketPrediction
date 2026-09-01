@@ -53,7 +53,17 @@ def transform_multipoint(points_list, arch, preprocessor):
     arr = np.array(points_list, dtype=float)
     return preprocessor.apply_inverse(arr, jaw=arch).tolist()
 
-
+def _denormalization_matrix(translation, scaling, flip):
+    """4x4 transform inverting normalize(): undoes unit-sphere scaling, the
+    centroid recentre, and (upper only) the 180 deg Y flip."""
+    S = np.eye(4)
+    S[0, 0] = S[1, 1] = S[2, 2] = (1.0 / scaling) if scaling else 1.0
+    T = np.eye(4)
+    T[:3, 3] = np.asarray(translation, dtype=float)
+    R = np.eye(4)
+    if flip: R[:3, :3] = rotation_180_y()          # its own inverse
+    return R @ T @ S
+    
 def process_tooth_predictions(mesh, 
                               predictions:dict,
                               patient_id:str, 
@@ -170,6 +180,9 @@ def process_tooth_predictions(mesh,
             "zAxis": (np.array(denormalized.get('Bracket')) + v_normal_denorm).tolist(),
         },
     }
+    # Tooth-level part only (undoes normalize()); postprocess_predictions left-
+    # multiplies the preprocessing inverse to get the full denorm_matrix.
+    json_data["denorm_matrix_tooth"] = _denormalization_matrix(translation, scaling, flip=(fdi <= 28)).tolist()
     
     # Add cusps for molars and premolars
     if (fdi in MOLARS or fdi in PREMOLARS) and 'Cusp' in denormalized:
@@ -311,6 +324,12 @@ def postprocess_predictions(data_folder:Path,
                 rotated_entry['cusps'] = transform_multipoint(pdata['cusps'], arch, preprocessor)
             if fdi in MOLARS and pdata.get('planar'):
                 rotated_entry['planar'] = transform_multipoint(pdata['planar'], arch, preprocessor)
+            # Full transform: normalized tooth mesh -> original scan space
+            # (after scanTransformMatrix, before the standard-orientation rotations).
+            M = np.array(pdata.get("denorm_matrix_tooth", np.eye(4)), dtype=float)
+            for mat in reversed(preprocessor.get_matrices(arch)):
+                M = np.linalg.inv(mat) @ M
+            rotated_entry["denorm_matrix"] = M.tolist()
             return tooth_key, rotated_entry
         except Exception as e:
             print(f"⚠️ Error rotating points for {tooth_key}: {e}")
