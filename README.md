@@ -17,6 +17,39 @@ actually works, that's the one file to edit — everything else (folder-watching
 `monitor.py`, symlink/temp-dir staging in `infer.py`, dataset iteration in `main.py`)
 is just orchestration around it.
 
+# Installation
+
+Only needed to run `infer.py` / `main.py` / `segment.py` directly on a host, or
+to develop/train outside the container — the [Docker monitor](#production-the-docker-monitor)
+builds its own environment and needs none of this.
+
+Requires an NVIDIA GPU + driver compatible with CUDA 12.4 (the `libs/` extensions
+below compile against it).
+
+```bash
+git clone <this-repo-url>
+cd IOS-Landmarks
+
+# 1. Pointcept environment: PyTorch 2.5.0 / CUDA 12.4 + the framework's own deps
+#    (spconv, torch-geometric/-scatter/-cluster, open3d, timm, ...), and builds
+#    the CUDA extensions in libs/pointops and libs/pointgroup_ops. This mirrors
+#    Pointcept's own installation guide:
+#    https://github.com/Pointcept/Pointcept#installation
+conda env create -f environment.yml
+conda activate pointcept-brackets-venv
+
+# 2. This repo's own extra dependencies (mesh/geometry I/O, viz, etc.),
+#    on top of the pointcept environment above.
+pip install -r requirements.txt
+```
+
+Scripts import `pointcept`/`application`/`libs` off the repo root, so run them
+from there with `PYTHONPATH=.` (or `export PYTHONPATH=.` once per shell) —
+see `Dockerfile` / `docker-compose.yml` for how the container sets this.
+
+Pretrained weights are required to actually run inference — see
+[Model weights](#model-weights) below.
+
 # Results
 
 ## Predicted landmarks
