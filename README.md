@@ -123,6 +123,11 @@ them itself before running the pipeline.
 
 Pretrained `--seg-weight` and `--bond-weight` checkpoints are available [here](https://drive.google.com/drive/folders/1dQYWACZfZUrg0hWHfTeNg7L60KiqFGL-?usp=sharing).
 
+The segmentator is trained on the [Teeth3DS](https://crns-smartvision.github.io/teeth3ds) dataset
+(train and test splits combined). The landmark/bonding-point predictor is trained on the
+[3DTeethLand](https://github.com/crns-smartvision/3DTeethLand) dataset (train and test splits
+combined) plus a private dataset.
+
 # Production: the Docker monitor
 
 ```bash
@@ -235,6 +240,27 @@ Not part of the production path — a benchmark harness used to run the model on
 the 3DTeethLand dataset layout (`lower`/`upper` subfolders keyed by patient
 id), matching predictions against `.txt` sample lists and optionally
 collecting ground-truth keypoints.
+
+`--data-folder` must be laid out as:
+
+```
+<data-folder>/
+  lower/
+    <patient_id>/
+      <patient_id>_lower.obj (or .stl)
+      <patient_id>_lower__kpt.json   # GT landmarks, only needed with --collect-gt
+  upper/
+    <patient_id>/
+      <patient_id>_upper.obj (or .stl)
+      <patient_id>_upper__kpt.json   # GT landmarks, only needed with --collect-gt
+```
+
+`--samples` takes one or more plain-text files, one `<patient_id>_<arch>` entry
+per line (e.g. `0140J5NX_lower`) — matching the mesh filename's stem, arch
+suffix included. Entries from every file passed are pooled together and
+filtered against whichever `lower/`/`upper/` folder actually matches each
+entry's arch, so passing separate `lower.txt`/`upper.txt` files (as in the
+example below) is a convention, not a requirement.
 
 ```bash
 python main.py \
