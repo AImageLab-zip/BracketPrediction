@@ -135,6 +135,48 @@ def process_tooth_predictions(mesh,
         v_normal = get_normal_smooth_vector(mesh, bracket, vertices, scaling)
         v_io, v_perp = get_io_perp(v_normal, np.array(incisal), np.array(outer))
 
+    # ---- derived mesio-distal width landmarks ------------------------------
+    # The model places Mesial/Distal inside the silhouette, so the pair
+    # underestimates the crown width. Pull them out to the widest chord of the
+    # *undilated* tooth. Strictly additive: Mesial/Distal are left untouched,
+    # and a failure here must not cost the tooth its other landmarks.
+    mesial_pred, distal_pred = projected.get('Mesial'), projected.get('Distal')
+    if mesial_pred is not None and distal_pred is not None:
+        # Seed with the predictions so the pair ALWAYS exists. A missing core,
+        # a degenerate tooth or any failure below then degrades to "same as
+        # Mesial/Distal" instead of dropping the field: a None here is filtered
+        # out downstream (see postprocess_predictions) and the key would vanish
+        # from landmarks.json entirely, which callers read as a missing
+        # landmark rather than an un-improved one.
+        projected['BoundaryMesial'] = np.asarray(mesial_pred, dtype=float)
+        projected['BoundaryDistal'] = np.asarray(distal_pred, dtype=float)
+
+        core_pts = load_core_points(teeth_path, tooth_key, cache)
+        if core_pts is None:
+            print(f"  ⏭  {tooth_key}: no core vertices on disk or in cache, "
+                  f"skipping boundary M/D (re-run segmentation to generate them)")
+        else:
+            try:
+                mm = (1.0 / scaling) if scaling else 1.0
+                chord = widest_md_chord(
+                    core_pts, mesial_pred, distal_pred,
+                    core_normals=core_vertex_normals(mesh, core_pts),
+                    up_axis=crown_long_axis(projected.get('Incisal'),
+                                            projected.get('Gingival'), fdi),
+                    mesh=mesh, fdi=fdi, mm_per_unit=mm,
+                )
+                projected['BoundaryMesial'] = chord['boundary_mesial']
+                projected['BoundaryDistal'] = chord['boundary_distal']
+                note = ""
+                if chord['fallback']:
+                    note = f"  (kept prediction: {chord['guard_reason']})"
+                elif chord['implausible']:
+                    note = f"  (⚠️ {chord['guard_reason']})"
+                print(f"  ↔ {tooth_key}: M-D width {chord['md_width_pred'] * mm:.2f}"
+                      f" -> {chord['width'] * mm:.2f} mm{note}")
+            except Exception as e:
+                print(f"  ⚠️ {tooth_key}: boundary M/D failed ({e})")
+
     # Apply inverse transformation: denormalize the points
     denormalized = {}
     for name, point in projected.items():
@@ -171,6 +213,8 @@ def process_tooth_predictions(mesh,
         "gingival": denormalized.get('Gingival'),
         "mesial": denormalized.get('Mesial'),
         "distal": denormalized.get('Distal'),
+        "boundary_mesial": denormalized.get('BoundaryMesial'),
+        "boundary_distal": denormalized.get('BoundaryDistal'),
         "inner": denormalized.get('InnerPoint'),
         "facial": denormalized.get('FacialPoint'),
         "basePlane": {
@@ -294,6 +338,8 @@ def postprocess_predictions(data_folder:Path,
                 'gingival':         pdata.get('gingival'),
                 'mesial':           pdata.get('mesial'),
                 'distal':           pdata.get('distal'),
+                'boundary_mesial':   pdata.get('boundary_mesial'),
+                'boundary_distal':   pdata.get('boundary_distal'),
                 'inner':            pdata.get('inner'),
                 'facial':           pdata.get('facial'),
                 'basePlane_origin': pdata['basePlane']['origin'],
@@ -317,7 +363,8 @@ def postprocess_predictions(data_folder:Path,
                     'zAxis':  rotated_scalar.get('basePlane_zAxis'),
                 },
             }
-            for key in ['bracket', 'gingival', 'mesial', 'distal', 'inner', 'facial']:
+            for key in ['bracket', 'gingival', 'mesial', 'distal',
+                        'boundary_mesial', 'boundary_distal', 'inner', 'facial']:
                 if rotated_scalar.get(key):
                     rotated_entry[key] = rotated_scalar[key]
             if (fdi in MOLARS or fdi in PREMOLARS) and pdata.get('cusps'):

@@ -20,7 +20,7 @@ services:
       - REMESH=${REMESH:-false}
       - CACHE=${CACHE:-false}
       - SAVE_PLY=${SAVE_PLY:-false}
-      - VIS_SEG=${VIS_SEG:-false}
+      - VIS_SEG=${VIS_SEG:-true}
       - WORKERS=${WORKERS:-1}
       - LANDMARKS=${LANDMARKS:-}
       - PREPROCESSING=${PREPROCESSING:-/workspace/preprocessing/production_preprocessing.yaml}

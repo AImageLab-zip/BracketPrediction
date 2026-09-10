@@ -127,13 +127,15 @@ class LandmarksPredictor:
         )
 
     def export_ply(self, patient_dir: Path):
-        """Write a landmarks point cloud next to the JSON results, if enabled."""
+        """Write a landmarks point cloud per arch next to the JSON results."""
         if not self.save_ply:
             return
-        json_to_ply(
+        written = json_to_ply(
             patient_dir / "output_reg" / "results" / "landmarks.json",
             patient_dir / "output_reg" / "results" / "landmarks.ply",
         )
+        for path in written:
+            print(f"💾 Saved landmark point cloud to: {path}")
 
     def predict(self, directory: Path, clean_previous: bool = True, postprocess: bool = False):
         """Run the full pipeline (segmentation → bond prediction → optional

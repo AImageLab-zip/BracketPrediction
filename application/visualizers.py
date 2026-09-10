@@ -21,7 +21,13 @@ COLORS = {
     "facial":   [255, 128, 0],
     "cusps":    [128, 255, 128],
     "planar":   [200, 200, 200],
+    "boundary_mesial": [128, 0, 128],  # dark magenta, pairs with "mesial"
+    "boundary_distal": [0, 128, 128],  # dark cyan, pairs with "distal"
 }
+
+# Entries in landmarks.json that are not point data and must never reach the
+# point cloud: "basePlane" is a dict of axes, "denorm_matrix" a 4x4 transform.
+PLY_SKIP_KEYS = {"basePlane", "gingival", "denorm_matrix", "denorm_matrix_tooth"}
 
 AUTOBONDING_MAPPING = {
     48: 1, 47: 2, 46: 3,
@@ -32,6 +38,23 @@ AUTOBONDING_MAPPING = {
     38: 16, 0:0
 }
 INVERSE_AUTOBONDING_MAPPING = {v: k for k, v in AUTOBONDING_MAPPING.items()}
+
+def _marker_kwargs(style: dict) -> dict:
+    """Scatter kwargs for one landmark style.
+
+    Boundary points are drawn hollow and larger so they stay readable next to
+    the prediction they were derived from, which shares their marker shape.
+    """
+    kw = dict(s=style.get('size', 100), marker=style['marker'],
+              linewidths=style.get('lw', 2), zorder=5)
+    if style.get('hollow'):
+        kw['facecolors'] = 'none'
+        kw['edgecolors'] = style['color']
+    else:
+        kw['c'] = style['color']
+        kw['edgecolors'] = 'black'
+    return kw
+
 
 def plot_teeth(points_dict: dict, 
                v_io:np.ndarray, v_perp:np.ndarray,
@@ -65,11 +88,37 @@ def plot_teeth(points_dict: dict,
         'Gingival': {'color': 'green', 'marker': 'D', 'label': 'Gingival'},
         'Mesial': {'color': 'purple', 'marker': 'v', 'label': 'Mesial'},
         'Distal': {'color': 'brown', 'marker': '^', 'label': 'Distal'},
-        'Inner': {'color': 'pink', 'marker': 'P', 'label': 'Inner'},
-        'Outer': {'color': 'magenta', 'marker': '>', 'label': 'Outer'},
+        'BoundaryMesial': {'color': 'magenta', 'marker': 'v', 'label': 'Mesial (boundary)',
+                           'hollow': True, 'size': 200, 'lw': 2.5},
+        'BoundaryDistal': {'color': 'red', 'marker': '^', 'label': 'Distal (boundary)',
+                           'hollow': True, 'size': 200, 'lw': 2.5},
+        # Keys must match the names in bond.SINGLE_LANDMARKS ('InnerPoint' /
+        # 'OuterPoint'); as plain 'Inner'/'Outer' they never matched and these
+        # two landmarks were silently absent from every single-tooth plot.
+        'InnerPoint': {'color': 'pink', 'marker': 'P', 'label': 'Inner'},
+        'OuterPoint': {'color': 'teal', 'marker': '>', 'label': 'Outer'},
         'Planar': {'color': 'red', 'marker': '*', 'label': 'Planar'},
         'Cusp': {'color': 'blue', 'marker': 'X', 'label': 'Cusp'},
     }
+
+
+    def draw_md_correction(ax, i, j):
+        """Dashed leader from each prediction to its corrected boundary point,
+        plus the chord whose length is the measured mesio-distal width."""
+        bm, bd = points_dict.get('BoundaryMesial'), points_dict.get('BoundaryDistal')
+        if bm is None or bd is None:
+            return
+        ax.plot([bm[i], bd[i]], [bm[j], bd[j]], c='red', lw=1.6, alpha=0.75,
+                zorder=4, label='M-D width')
+        first = True
+        for pred_key, bnd in (('Mesial', bm), ('Distal', bd)):
+            pred = points_dict.get(pred_key)
+            if pred is None:
+                continue
+            ax.plot([pred[i], bnd[i]], [pred[j], bnd[j]], c='0.3', lw=1.2,
+                    ls='--', alpha=0.9, zorder=4,
+                    label='correction' if first else None)
+            first = False
 
     # View 1: XY plane (looking down Z-axis)
     ax = axes[0]
@@ -79,10 +128,11 @@ def plot_teeth(points_dict: dict,
             style = point_styles[name]
             if isinstance(points, list):
                 for p in points:
-                    ax.scatter(p[0], p[1], c=style['color'], s=100, marker=style['marker'], edgecolors='black', linewidths=2, label=style['label'], zorder=5)
+                    ax.scatter(p[0], p[1], label=style['label'], **_marker_kwargs(style))
                     style['label'] = None  # only label once
             else:
-                ax.scatter(points[0], points[1], c=style['color'], s=100, marker=style['marker'], edgecolors='black', linewidths=2, label=style['label'], zorder=5)
+                ax.scatter(points[0], points[1], label=style['label'], **_marker_kwargs(style))
+    draw_md_correction(ax, 0, 1)
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_title('XY View (Top)')
@@ -98,10 +148,11 @@ def plot_teeth(points_dict: dict,
             style = point_styles[name]
             if isinstance(points, list):
                 for p in points:
-                    ax.scatter(p[0], p[2], c=style['color'], s=100, marker=style['marker'], edgecolors='black', linewidths=2, label=style['label'], zorder=5)
+                    ax.scatter(p[0], p[2], label=style['label'], **_marker_kwargs(style))
                     style['label'] = None
             else:
-                ax.scatter(points[0], points[2], c=style['color'], s=100, marker=style['marker'], edgecolors='black', linewidths=2, label=style['label'], zorder=5)
+                ax.scatter(points[0], points[2], label=style['label'], **_marker_kwargs(style))
+    draw_md_correction(ax, 0, 2)
     ax.set_xlabel('X')
     ax.set_ylabel('Z')
     ax.set_title('XZ View (Front)')
@@ -117,10 +168,11 @@ def plot_teeth(points_dict: dict,
             style = point_styles[name]
             if isinstance(points, list):
                 for p in points:
-                    ax.scatter(p[1], p[2], c=style['color'], s=100, marker=style['marker'], edgecolors='black', linewidths=2, label=style['label'], zorder=5)
+                    ax.scatter(p[1], p[2], label=style['label'], **_marker_kwargs(style))
                     style['label'] = None
             else:
-                ax.scatter(points[1], points[2], c=style['color'], s=100, marker=style['marker'], edgecolors='black', linewidths=2, label=style['label'], zorder=5)
+                ax.scatter(points[1], points[2], label=style['label'], **_marker_kwargs(style))
+    draw_md_correction(ax, 1, 2)
     ax.set_xlabel('Y')
     ax.set_ylabel('Z')
     ax.set_title('YZ View (Side)')
@@ -439,27 +491,78 @@ def create_segmentation_visualization(mesh:trimesh.Trimesh,
     print(f"  Saved visualization: {vis_output_path}")
 
 
-def json_to_ply(json_path, output_ply):
+PLY_VERTEX_DTYPE = [("x", "f4"), ("y", "f4"), ("z", "f4"),
+                    ("red", "u1"), ("green", "u1"), ("blue", "u1")]
+
+
+def _tooth_points(tooth: dict) -> list:
+    """Coloured landmark points for one tooth entry of landmarks.json."""
+    out = []
+    for key, value in tooth.items():
+
+        if key in PLY_SKIP_KEYS or not value:
+            continue  # axes, transforms and missing landmarks
+
+        color = COLORS.get(key, [255, 255, 255])
+        pts = value if isinstance(value[0], list) else [value]
+        for pt in pts:
+            # Guards against any future non-point entry sneaking in: the
+            # vertex dtype has exactly three coordinate fields.
+            if len(pt) != 3:
+                continue
+            out.append((*pt, *color))
+    return out
+
+
+def _write_ply(vertices: list, path: Path) -> Path:
+    arr = np.array(vertices, dtype=PLY_VERTEX_DTYPE)
+    PlyData([PlyElement.describe(arr, "vertex")]).write(str(path))
+    return path
+
+
+def json_to_ply(json_path, output_ply, split_by_arch: bool = True):
+    """Write landmarks.json out as a coloured point cloud.
+
+    With `split_by_arch` (the default) one file is written per arch, named
+    after `output_ply`: landmarks.ply becomes landmarks_upper.ply and
+    landmarks_lower.ply. The two arches are overlapped in the model's working
+    frame, so a combined cloud is hard to read. An arch with no landmarks is
+    not written at all.
+
+    Pass split_by_arch=False when the JSON is known to hold a single arch and
+    the caller has already named the file accordingly (see infer.py).
+
+    Returns the list of paths actually written.
+    """
     with open(json_path) as f:
         data = json.load(f)
-    vertices = []
-    for tooth in data.values():
-        for key, value in tooth.items():
+    output_ply = Path(output_ply)
 
-            if key == "basePlane" or key == "gingival":
-                continue  # skip axes
+    if not split_by_arch:
+        vertices = [v for tooth in data.values() for v in _tooth_points(tooth)]
+        return [_write_ply(vertices, output_ply)] if vertices else []
 
-            if isinstance(value[0], list):  # list of points (cusps, planar)
-                for pt in value:
-                    color = COLORS.get(key, [255, 255, 255])
-                    vertices.append((*pt, *color))
-            else:  # single point
-                color = COLORS.get(key, [255, 255, 255])
-                vertices.append((*value, *color))
-    vertices = np.array(
-        vertices,
-        dtype=[("x", "f4"), ("y", "f4"), ("z", "f4"),
-               ("red", "u1"), ("green", "u1"), ("blue", "u1")]
-    )
-    ply = PlyData([PlyElement.describe(vertices, "vertex")])
-    ply.write(output_ply)
+    per_arch = {"upper": [], "lower": []}
+    unknown = []
+    for tooth_key, tooth in data.items():
+        key_l = str(tooth_key).lower()
+        # Both naming conventions carry the arch: "STEM_lower_<id>_FDI_47"
+        # and "<id>_lower_FDI_47".
+        arch = "lower" if "lower" in key_l else "upper" if "upper" in key_l else None
+        if arch is None:
+            unknown.append(tooth_key)
+            continue
+        per_arch[arch].extend(_tooth_points(tooth))
+
+    if unknown:
+        print(f"⚠️  {len(unknown)} tooth key(s) in {Path(json_path).name} name neither "
+              f"arch and were left out of the PLY (e.g. {unknown[0]})")
+
+    written = []
+    for arch, vertices in per_arch.items():
+        if not vertices:
+            continue
+        written.append(_write_ply(
+            vertices,
+            output_ply.with_name(f"{output_ply.stem}_{arch}{output_ply.suffix}")))
+    return written

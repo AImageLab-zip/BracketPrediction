@@ -256,7 +256,10 @@ class InferencePipeline:
         if self.engine.save_ply:
             landmarks_json_path = work_dir / f"{internal_stem}_landmarks.json"
             landmarks_json_path.write_text(json.dumps(landmarks))
-            json_to_ply(landmarks_json_path, out_dir / f"{scan.stem}_landmarks.ply")
+            # One scan is one arch, and the exported name already carries it,
+            # so keep a single file rather than the per-arch split.
+            json_to_ply(landmarks_json_path, out_dir / f"{scan.stem}_landmarks.ply",
+                        split_by_arch=False)
         shutil.copy(
             work_dir / "output_seg" / "result" / f"{internal_stem}_pred.npy",
             out_dir / f"{scan.stem}_seg.npy",

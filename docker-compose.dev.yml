@@ -1,0 +1,39 @@
+# Development override for docker-compose.yml
+#
+# Runs a throwaway dev container ALONGSIDE the production `autobonding-monitor`
+# stack (separate compose project name -> no collision, no recreation of prod).
+#
+# The whole repo is bind-mounted at /workspace, shadowing the `COPY . .` baked
+# into the image, so edits made on the host (with your editor + Claude Code +
+# git, all running on the host) are live in the container with no rebuild.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml exec autobonding bash
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml down
+
+#
+# Then run the app by hand inside that shell, e.g.:
+#   bash run_monitor_debug.sh   /   python main.py ...
+
+name: autobonding-dev
+
+services:
+  autobonding:
+    container_name: autobonding-dev
+    # Live repo -> container. Appended to the base file's data-dir mounts
+    # (those stay as nested mounts and keep working).
+    volumes:
+      - .:/workspace
+    # Keep the container up and idle; start processes yourself via `exec`.
+    command: sleep infinity
+    stdin_open: true
+    tty: true
+    # Run on a different GPU than production if you don't want to share device 0:
+    gpus:
+      - device: 2
+
+    # The pointcept base image runs as root, so files the container writes into
+    # the bind-mounted tree land as root:root on the host. If that becomes a
+    # nuisance, uncomment to run as your host user (uid/gid 1003 here):
+    # user: "1003:1003"
