@@ -1,3 +1,9 @@
 application/data
 application/data_debug
 venv/
+.env
+.git
+.github
+exp/
+__pycache__/
+**/__pycache__/
