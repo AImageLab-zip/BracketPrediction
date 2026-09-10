@@ -208,7 +208,20 @@ def dilate_and_save_teeth(mask:np.ndarray,
             continue
  
         class_points = points[combined_mask]
+
+        # Which of the exported vertices are the tooth itself rather than the
+        # dilation collar. The collar is ~5% of the bbox diagonal (see
+        # compute_dilation_masks) and on the mesial/distal sides it is made of
+        # the *adjacent teeth*, which are in contact. Any measurement of this
+        # tooth's own extent therefore has to be taken on the core alone.
+        core_mask = (mask == fdi_index)[combined_mask]
+
         normalized_class_points, translation, scale = normalize(class_points, "upper" in base_name)
+
+        # Stored as coordinates rather than an index mask: the tooth is written
+        # out as STL, and reloading an STL re-indexes (and merges) vertices, so
+        # a mask built here would not line up with the mesh bond.py reads back.
+        core_points = normalized_class_points[core_mask]
  
         face_mask = np.all(np.isin(faces, class_indices), axis=1)
         class_faces_old_idx = faces[face_mask]
@@ -244,6 +257,7 @@ def dilate_and_save_teeth(mask:np.ndarray,
         if cache:
             # Cache mode: store in memory only
             cache.store_mesh(tooth_key, tooth_mesh, json_data)
+            cache.store_core(tooth_key, core_points)
             print(f"  Cached FDI {fdi_index}: {len(class_points)} points, {len(class_faces)} faces")
         else:
             # Disk mode: save to file
@@ -254,9 +268,14 @@ def dilate_and_save_teeth(mask:np.ndarray,
                 json_output_path = teeth_output_dir / f"{tooth_key}.json"
                 with open(json_output_path, 'w') as f:
                     json.dump(json_data, f, indent=4)
+                # Undilated vertices, consumed by the mesio-distal width
+                # estimation in bond.py and by debug_shifted_landmarks.py.
+                core_output_path = teeth_output_dir / f"{tooth_key}.core.npy"
+                np.save(core_output_path, core_points)
                 print(f"  Saved FDI {fdi_index}: {len(class_points)} points, {len(class_faces)} faces")
                 print(f"    STL: {stl_output_path}")
                 print(f"    JSON: {json_output_path}")
+                print(f"    CORE: {core_output_path} ({len(core_points)}/{len(core_mask)} core verts)")
             except:
                 print("⚠ Warning, could not export {}".format(stl_output_path))
 

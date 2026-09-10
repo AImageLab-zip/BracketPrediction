@@ -182,7 +182,8 @@ Only new/unprocessed `.stl` files trigger work; files already recorded in
                                      original scan frame, keyed by tooth (e.g. "118_lower_FDI_47")
       projected_points_rotated.json byte-for-byte identical to landmarks.json — kept
                                      as an alias for anything still reading the old name
-      landmarks.ply                 only with --save-ply
+      landmarks_upper.ply           one coloured point cloud per arch,
+      landmarks_lower.ply            only with --save-ply
     plots/patient_<id>_FDI_<fdi>.png   per-tooth prediction plot (generated after completion)
     jaw_plots/<jaw>_rotated_predictions.png   whole-jaw preview (generated after completion)
 ```
@@ -206,7 +207,7 @@ tuned without rebuilding:
 | `CHECK_INTERVAL`    | `--check-interval`  | `5`     | Seconds between folder polls. |
 | `REMESH`            | `--remesh`          | `false` | Also save a remeshed version of each scan + its per-tooth split. |
 | `CACHE`             | `--cache`           | `false` | Keep tooth meshes in memory instead of writing `output_seg/teeth/*`. Faster, but skips those on-disk files — leave `false` to keep the full old on-disk layout. |
-| `SAVE_PLY`          | `--save-ply`        | `false` | Also write `landmarks.ply`. |
+| `SAVE_PLY`          | `--save-ply`        | `false` | Also write `landmarks_upper.ply` / `landmarks_lower.ply` (one per arch; an arch with no landmarks is skipped). |
 | `VIS_SEG`           | `--vis-seg`         | `false` | Also render `<scan>_segmentation_views.png`. |
 | `WORKERS`           | `--workers`         | `1`     | Thread pool size for CPU/IO-bound steps (disk I/O, per-tooth splitting, heatmap decoding). Does not affect GPU inference. |
 | `LANDMARKS`         | `--landmarks`       | (all)   | Space-separated subset, e.g. `LANDMARKS="Bracket Incisal Cusp"`. `Bracket`/`Incisal`/`OuterPoint` are always computed regardless. |

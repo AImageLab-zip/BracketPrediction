@@ -1,4 +1,5 @@
 """Simple in-memory cache for teeth meshes and their metadata."""
+import numpy as np
 import trimesh
 from pathlib import Path
 import json
@@ -6,10 +7,11 @@ import json
 
 class TeethCache:
     """In-memory cache for teeth meshes and transformation metadata."""
-    
+
     def __init__(self):
         self.meshes = {}  # tooth_key -> trimesh object
         self.transforms = {}  # tooth_key -> transform dict
+        self.cores = {}  # tooth_key -> (K, 3) undilated vertices
         self.scan_meshes = {}  # scan_name -> trimesh object
     
     def load_mesh(self, teeth_path: Path, tooth_key: str) -> trimesh.Trimesh:
@@ -38,16 +40,40 @@ class TeethCache:
         self.transforms[tooth_key] = transform_data
         return transform_data
     
+    def load_core(self, teeth_path: Path, tooth_key: str):
+        """Undilated tooth vertices from cache or disk, None if unavailable.
+
+        These are the vertices carrying the tooth's own segmentation label,
+        without the dilation collar of gum and adjacent teeth. Returns None for
+        teeth segmented before this was introduced, so callers can degrade
+        instead of failing.
+        """
+        if tooth_key in self.cores:
+            return self.cores[tooth_key]
+
+        core_file = teeth_path / f"{tooth_key}.core.npy"
+        if not core_file.exists():
+            return None
+        core = np.load(core_file)
+        self.cores[tooth_key] = core
+        return core
+
+    def store_core(self, tooth_key: str, core_points):
+        """Store undilated tooth vertices in cache (skip disk I/O)."""
+        self.cores[tooth_key] = core_points
+
     def clear(self):
         """Clear all cached data."""
         self.meshes.clear()
         self.transforms.clear()
+        self.cores.clear()
         self.scan_meshes.clear()
 
     def clear_teeth_data(self):
         """Clear only tooth-level cache, keep preloaded scan meshes."""
         self.meshes.clear()
         self.transforms.clear()
+        self.cores.clear()
 
     def preload_scan_mesh(self, scan_path: Path):
         """Load a full scan mesh once and keep it in memory."""
